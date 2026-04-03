@@ -1,0 +1,28 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build output
+dist/
+out/
+*.vsix
+
+# VS Code
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/settings.json
+!.vscode/extensions.json
+
+# OS
+.DS_Store
+
+# Python / venv
+.venv/
+__pycache__/
+*.pyc
+
+# (optional) coverage
+coverage/
