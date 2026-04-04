@@ -3,6 +3,9 @@
 import * as vscode from 'vscode';
 import { checkExtensionVenv } from './python/venv';
 import { installExtensionRequirements } from './python/envManager'; // adjust to your path
+import { getExtensionVenvPaths } from './python/venv';
+import { runPyGreenSense } from './python/pythonRunner';
+import { readHistoryJson } from './python/history';
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
@@ -56,6 +59,64 @@ export function activate(context: vscode.ExtensionContext) {
 	);
 
 	context.subscriptions.push(installReq);
+
+	const analyzeFile = vscode.commands.registerCommand(
+		'pygreensense-extension.analyzeFile',
+		async () => {
+			const editor = vscode.window.activeTextEditor;
+			if (!editor) {
+				vscode.window.showErrorMessage('No file open.');
+				return;
+			}
+
+			const targetFile = editor.document.uri.fsPath;
+			const workspaceRoot = vscode.workspace.getWorkspaceFolder(editor.document.uri)?.uri.fsPath;
+			if (!workspaceRoot) {
+				vscode.window.showErrorMessage('Open a folder/workspace first.');
+				return;
+			}
+
+			output.clear();
+			output.show(true);
+			output.appendLine('=== PyGreenSense Run ===');
+			output.appendLine(`workspace: ${workspaceRoot}`);
+			output.appendLine(`target: ${targetFile}`);
+
+			// (1) Get venv python path (you already validated venv exists)
+			const { pythonPath } = getExtensionVenvPaths(context);
+			output.appendLine(`venv python: ${pythonPath}`);
+
+			// (2) Run PyGreenSense
+			const result = await runPyGreenSense(pythonPath, workspaceRoot, targetFile, output);
+
+			output.appendLine(`--- exit code: ${result.code} ---`);
+
+			if (result.code !== 0) {
+				vscode.window.showErrorMessage('PyGreenSense failed. See Output → PyGreenSense.');
+				return;
+			}
+
+			// (3) Read history.json
+			const history = readHistoryJson(workspaceRoot);
+
+			if (!history.foundPath) {
+				output.appendLine('history.json not found. Checked:');
+				history.pathChecked.forEach(p => output.appendLine(`  - ${p}`));
+				vscode.window.showWarningMessage('Run finished but history.json was not found (see Output).');
+				return;
+			}
+
+			output.appendLine(`history.json found at: ${history.foundPath}`);
+			vscode.window.showInformationMessage('PyGreenSense run complete ✅ (stdout + history.json captured)');
+
+			// Later: send to webview instead of only Output
+			// For now, you have:
+			// - result.stdout / result.stderr
+			// - history.json parsed as history.json
+		}
+	);
+
+	context.subscriptions.push(analyzeFile);
 
 	// Use the console to output diagnostic information (console.log) and errors (console.error)
 	// This line of code will only be executed once when your extension is activated
