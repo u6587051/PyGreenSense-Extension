@@ -1,11 +1,11 @@
 // The module 'vscode' contains the VS Code extensibility API
 // Import the module and reference it with the alias vscode in your code below
 import * as vscode from 'vscode';
-import { checkExtensionVenv } from './python/venv';
 import { installExtensionRequirements } from './python/envManager'; // adjust to your path
-import { getExtensionVenvPaths } from './python/venv';
-import { runPyGreenSense } from './python/pythonRunner';
+import { checkExtensionVenv, getExtensionVenvPaths } from './python/venv';
+import { runInVenv, runPyGreenSense } from './python/pythonRunner';
 import { readHistoryJson } from './python/history';
+import { PYGREENSENSE_CLI_MODULE } from './python/config';
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
@@ -82,37 +82,45 @@ export function activate(context: vscode.ExtensionContext) {
 			output.appendLine(`workspace: ${workspaceRoot}`);
 			output.appendLine(`target: ${targetFile}`);
 
-			// (1) Get venv python path (you already validated venv exists)
-			const { pythonPath } = getExtensionVenvPaths(context);
-			output.appendLine(`venv python: ${pythonPath}`);
+			try {
+				const { pythonPath } = getExtensionVenvPaths(context);
+				output.appendLine(`venv python: ${pythonPath}`);
 
-			// (2) Run PyGreenSense
-			const result = await runPyGreenSense(pythonPath, workspaceRoot, targetFile, output);
+				const check = await runInVenv(
+					pythonPath,
+					['-c', `from ${PYGREENSENSE_CLI_MODULE} import main; print("pygreensense cli import ok")`],
+					workspaceRoot,
+					output
+				);
 
-			output.appendLine(`--- exit code: ${result.code} ---`);
+				if (check.code !== 0) {
+					vscode.window.showErrorMessage('PyGreenSense CLI is not importable in the extension venv.');
+					return;
+				}
 
-			if (result.code !== 0) {
-				vscode.window.showErrorMessage('PyGreenSense failed. See Output → PyGreenSense.');
-				return;
+				const result = await runPyGreenSense(pythonPath, workspaceRoot, targetFile, output);
+				output.appendLine(`--- exit code: ${result.code} ---`);
+
+				if (result.code !== 0) {
+					vscode.window.showErrorMessage('PyGreenSense failed. See Output → PyGreenSense.');
+					return;
+				}
+
+				const history = readHistoryJson(workspaceRoot);
+				if (!history.foundPath) {
+					output.appendLine('history.json not found. Checked:');
+					history.pathChecked.forEach(p => output.appendLine(`  - ${p}`));
+					vscode.window.showWarningMessage('Run completed, but history.json was not found.');
+					return;
+				}
+
+				output.appendLine(`history.json found at: ${history.foundPath}`);
+				vscode.window.showInformationMessage('PyGreenSense run complete ✅');
+			} catch (e: any) {
+				output.appendLine(`ERROR: ${e?.message ?? String(e)}`);
+				vscode.window.showErrorMessage(e?.message ?? String(e));
 			}
 
-			// (3) Read history.json
-			const history = readHistoryJson(workspaceRoot);
-
-			if (!history.foundPath) {
-				output.appendLine('history.json not found. Checked:');
-				history.pathChecked.forEach(p => output.appendLine(`  - ${p}`));
-				vscode.window.showWarningMessage('Run finished but history.json was not found (see Output).');
-				return;
-			}
-
-			output.appendLine(`history.json found at: ${history.foundPath}`);
-			vscode.window.showInformationMessage('PyGreenSense run complete ✅ (stdout + history.json captured)');
-
-			// Later: send to webview instead of only Output
-			// For now, you have:
-			// - result.stdout / result.stderr
-			// - history.json parsed as history.json
 		}
 	);
 
