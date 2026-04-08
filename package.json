@@ -14,6 +14,7 @@
     "onCommand:pygreensense-extension.checkVenv",
     "onCommand:pygreensense-extension.installRequirements",
     "onCommand:pygreensense-extension.analyzeFile",
+    "onCommand:pygreensense-extension.analyzeProject",
     "onLanguage:python"
   ],
   "main": "./dist/extension.js",
@@ -34,6 +35,10 @@
       {
         "command": "pygreensense-extension.analyzeFile",
         "title": "PyGreenSense: Run Code Analysis"
+      },
+      {
+        "command": "pygreensense-extension.analyzeProject",
+        "title": "PyGreenSense: Analyze Entire Project"
       }
     ]
   },
