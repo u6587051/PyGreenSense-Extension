@@ -13,10 +13,12 @@ import {
   parsePyGreenSenseReport,
   type ParsedIssue,
   type ParsedIssueGroup,
+  type ParsedReport,
   type ParsedSeverity,
 } from './reportParser';
 
 export type PyGreenSenseResultsViewModel = {
+  extensionUri: vscode.Uri;
   targetFile: string;
   workspaceRoot: string;
   history: HistoryRead;
@@ -40,32 +42,54 @@ type MetricCard = {
 type DetailRow = {
   label: string;
   value: string;
+  tone?: ParsedSeverity;
+};
+
+type PromptMessage = {
+  type: 'copyPrompt';
+  prompt: string;
 };
 
 let resultsPanel: vscode.WebviewPanel | undefined;
+let resultsPanelDisposables: vscode.Disposable[] = [];
 
 export function showPyGreenSenseResultsPanel(data: PyGreenSenseResultsViewModel): void {
   const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
+  const title = `PyGreenSense Report: ${path.basename(data.targetFile)}`;
 
   if (!resultsPanel) {
     resultsPanel = vscode.window.createWebviewPanel(
       'pygreensenseResults',
-      `Carbon Cleaner: ${path.basename(data.targetFile)}`,
+      title,
       {
         viewColumn: column,
         preserveFocus: true,
       },
       {
         enableScripts: true,
+        localResourceRoots: [vscode.Uri.joinPath(data.extensionUri, 'media')],
         retainContextWhenHidden: true,
       }
     );
 
+    resultsPanelDisposables.push(
+      resultsPanel.webview.onDidReceiveMessage(async (message: unknown) => {
+        if (!isPromptMessage(message)) {
+          return;
+        }
+
+        await vscode.env.clipboard.writeText(message.prompt);
+        void vscode.window.showInformationMessage('PyGreenSense fix prompt copied to the clipboard.');
+      })
+    );
+
     resultsPanel.onDidDispose(() => {
+      resultsPanelDisposables.forEach(disposable => disposable.dispose());
+      resultsPanelDisposables = [];
       resultsPanel = undefined;
     });
   } else {
-    resultsPanel.title = `Carbon Cleaner: ${path.basename(data.targetFile)}`;
+    resultsPanel.title = title;
     resultsPanel.reveal(column, true);
   }
 
@@ -80,37 +104,28 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
   const smellSummaries = buildSmellSummaries(latestMetric?.smell_breakdown, parsedReport.issueGroups);
   const issueGroups = parsedReport.issueGroups.length > 0 ? parsedReport.issueGroups : buildFallbackIssueGroups(smellSummaries);
   const issueCount = parsedReport.issueCount ?? smellSummaries.reduce((sum, smell) => sum + smell.count, 0);
+  const issueTypeCount = countIssueTypes(latestMetric, parsedReport);
   const targetPath = firstNonEmpty(parsedReport.targetFile, latestMetric?.target_file, data.targetFile) ?? data.targetFile;
   const targetLabel = formatPathForDisplay(targetPath, data.workspaceRoot);
   const workspaceLabel = path.basename(data.workspaceRoot) || data.workspaceRoot;
   const statusLabel =
     firstNonEmpty(latestMetric?.status, parsedReport.currentRunStatus, data.runResult.code === 0 ? 'Run complete' : 'Run failed') ??
     'Run complete';
-  const statusTone = getStatusTone(statusLabel, data.runResult.code);
   const metrics = getMetricCards({
     latestMetric,
     parsedReport,
     historyRunCount: historyEntries.length,
     issueCount,
+    issueTypeCount,
   });
-  const detailRows = getDetailRows({
-    data,
-    latestMetric,
-    parsedReport,
-    historyEntries,
-  });
+  const detailRows = getDetailRows(data, latestMetric, parsedReport);
   const programOutputLines = parsedReport.programOutput;
   const stdout = data.runResult.stdout.trim();
   const stderr = data.runResult.stderr.trim();
   const rawOutput = stdout || stderr;
-  const historyJson = data.history.json ? JSON.stringify(data.history.json, null, 2) : '';
-  const showIssueFilePaths = shouldShowIssueFilePaths(issueGroups);
-  const runSummary = getRunSummaryText({
-    issueCount,
-    statusLabel,
-    targetLabel,
-    historyCount: historyEntries.length,
-  });
+  const statusTone = getStatusTone(statusLabel, data.runResult.code);
+  const summaryPrompt = buildSummaryPrompt(targetLabel, issueCount, smellSummaries);
+  const cloudImageUri = webview.asWebviewUri(vscode.Uri.joinPath(data.extensionUri, 'media', 'simple-cloud.png'));
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -119,1371 +134,784 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';"
+      content="default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';"
     />
-    <title>Carbon Cleaner</title>
+    <title>PyGreenSense VS Code panel</title>
     <style>
       :root {
-        color-scheme: light;
-        --paper: #f5f2ea;
-        --paper-edge: #ece6d9;
-        --panel: rgba(255, 255, 255, 0.82);
-        --panel-strong: rgba(255, 255, 255, 0.95);
-        --ink: #171611;
-        --muted: #615d51;
-        --line: rgba(23, 22, 17, 0.1);
-        --sky-top: #5bc8ff;
-        --sky-mid: #8bdfff;
-        --sky-bottom: #c9f3ff;
-        --grass: #7acb3c;
-        --grass-dark: #35691b;
-        --soil: #85631d;
-        --soil-dark: #584112;
-        --cloud: #413c50;
-        --cloud-soft: #5b556d;
-        --good: #1c7c4f;
-        --good-soft: #ddf7e7;
-        --warn: #9c6600;
-        --warn-soft: #fff0d2;
-        --danger: #bc4c57;
-        --danger-soft: #ffe5e8;
-        --neutral: #294768;
-        --neutral-soft: #dbe8f5;
-        --shadow: 0 24px 60px rgba(36, 31, 23, 0.14);
-        --shadow-soft: 0 16px 30px rgba(36, 31, 23, 0.1);
-        --radius-xl: 30px;
-        --radius-lg: 22px;
-        --radius-md: 16px;
-        --radius-sm: 12px;
+        color-scheme: light dark;
+        --font-mono: var(--vscode-editor-font-family, "SFMono-Regular", "Cascadia Mono", "Menlo", monospace);
+        --font-ui: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+        --cloud-image: url("${cloudImageUri}");
       }
 
       * {
         box-sizing: border-box;
+        margin: 0;
+        padding: 0;
       }
 
       body {
-        margin: 0;
         min-height: 100vh;
-        color: var(--ink);
-        font-family: "Avenir Next", "Trebuchet MS", "Gill Sans", sans-serif;
-        background:
-          radial-gradient(circle at top left, rgba(91, 200, 255, 0.22), transparent 28%),
-          radial-gradient(circle at bottom right, rgba(122, 203, 60, 0.15), transparent 24%),
-          linear-gradient(180deg, #faf8f2 0%, var(--paper) 100%);
+        padding: 0 6px 48px;
+        background: #ffffff;
+        color: #111111;
+        font-family: Georgia, "Times New Roman", serif;
       }
 
-      body::before {
-        content: "";
-        position: fixed;
-        inset: 0;
-        pointer-events: none;
-        opacity: 0.3;
-        background-image: linear-gradient(transparent 0, transparent 27px, rgba(23, 22, 17, 0.025) 28px);
-        background-size: 100% 28px;
-      }
-
-      main {
-        position: relative;
-        z-index: 1;
-        max-width: 1320px;
-        margin: 0 auto;
-        padding: 24px;
-      }
-
-      .cc-shell {
-        overflow: hidden;
-        border: 1px solid var(--line);
-        border-radius: 32px;
-        background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(245, 242, 234, 0.95));
-        box-shadow: var(--shadow);
-      }
-
-      .cc-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 18px;
-        padding: 18px 22px;
-        border-bottom: 1px solid var(--line);
-        background: rgba(255, 255, 255, 0.64);
-      }
-
-      .cc-brand {
-        display: flex;
-        align-items: center;
-        gap: 14px;
-        min-width: 0;
-      }
-
-      .cc-brand-mark {
-        display: flex;
-        align-items: flex-end;
-        gap: 3px;
-        padding: 10px 12px;
-        border-radius: 999px;
-        background: rgba(23, 22, 17, 0.06);
-      }
-
-      .cc-brand-cloud {
-        position: relative;
-        height: 12px;
-        border-radius: 999px 999px 4px 4px;
-        background: var(--cloud);
-      }
-
-      .cc-brand-cloud::before,
-      .cc-brand-cloud::after {
-        content: "";
-        position: absolute;
-        border-radius: 50%;
-        background: inherit;
-      }
-
-      .cc-brand-cloud::before {
-        top: -6px;
-        left: 3px;
-        width: 11px;
-        height: 11px;
-      }
-
-      .cc-brand-cloud::after {
-        top: -4px;
-        right: 2px;
-        width: 8px;
-        height: 8px;
-      }
-
-      .cc-brand-cloud.a {
-        width: 16px;
-        opacity: 0.45;
-      }
-
-      .cc-brand-cloud.b {
-        width: 22px;
-        opacity: 0.65;
-      }
-
-      .cc-brand-cloud.c {
-        width: 28px;
-        opacity: 0.9;
-      }
-
-      .cc-title {
-        margin: 0;
-        font-size: 14px;
-        font-weight: 800;
-        letter-spacing: 0.16em;
-        text-transform: uppercase;
-      }
-
-      .cc-subtitle {
-        margin: 4px 0 0;
-        font-size: 12px;
-        color: var(--muted);
-      }
-
-      .cc-status-badge {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        min-width: 132px;
-        padding: 10px 14px;
-        border-radius: 999px;
-        font-size: 11px;
-        font-weight: 800;
-        letter-spacing: 0.1em;
-        text-transform: uppercase;
-      }
-
-      .cc-status-badge.good {
-        background: var(--good-soft);
-        color: var(--good);
-      }
-
-      .cc-status-badge.medium {
-        background: var(--warn-soft);
-        color: var(--warn);
-      }
-
-      .cc-status-badge.low,
-      .cc-status-badge.neutral {
-        background: var(--neutral-soft);
-        color: var(--neutral);
-      }
-
-      .cc-status-badge.danger {
-        background: var(--danger-soft);
-        color: var(--danger);
-      }
-
-      .cc-hero {
-        display: grid;
-        grid-template-columns: minmax(320px, 0.92fr) minmax(340px, 1.08fr);
-        gap: 22px;
-        padding: 22px;
-      }
-
-      .hero-card {
-        border: 1px solid var(--line);
-        border-radius: var(--radius-xl);
-        background: var(--panel);
-        box-shadow: var(--shadow-soft);
-      }
-
-      .scene-card {
-        padding: 18px;
-      }
-
-      .scene {
-        position: relative;
-        min-height: 360px;
-        overflow: hidden;
-        border-radius: 24px;
-        border: 1px solid rgba(255, 255, 255, 0.4);
-        background: linear-gradient(180deg, var(--sky-top) 0%, var(--sky-mid) 58%, var(--sky-bottom) 100%);
-      }
-
-      .scene::before {
-        content: "";
-        position: absolute;
-        inset: 0;
-        opacity: 0.2;
-        background-image:
-          radial-gradient(circle at 16% 18%, rgba(255, 255, 255, 0.85), transparent 10%),
-          radial-gradient(circle at 82% 12%, rgba(255, 255, 255, 0.6), transparent 8%);
-      }
-
-      .scene-ground {
-        position: absolute;
-        left: 0;
-        right: 0;
-        bottom: 40px;
-        height: 92px;
-        background:
-          repeating-linear-gradient(
-            90deg,
-            rgba(255, 255, 255, 0.9) 0,
-            rgba(255, 255, 255, 0.9) 3px,
-            transparent 3px,
-            transparent 16px
-          ),
-          linear-gradient(180deg, #9ce35d 0%, var(--grass) 68%, #69ab35 100%);
-      }
-
-      .scene-ground::before {
-        content: "";
-        position: absolute;
-        inset: 0;
-        background:
-          repeating-linear-gradient(
-            90deg,
-            transparent 0,
-            transparent 18px,
-            rgba(28, 84, 17, 0.5) 18px,
-            rgba(28, 84, 17, 0.5) 21px,
-            transparent 21px,
-            transparent 38px
-          );
-        opacity: 0.65;
-      }
-
-      .scene-soil {
-        position: absolute;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        height: 40px;
-        background:
-          radial-gradient(circle at 10% 50%, rgba(0, 0, 0, 0.2), transparent 3px),
-          radial-gradient(circle at 32% 74%, rgba(0, 0, 0, 0.24), transparent 3px),
-          radial-gradient(circle at 58% 36%, rgba(0, 0, 0, 0.2), transparent 3px),
-          radial-gradient(circle at 78% 64%, rgba(0, 0, 0, 0.2), transparent 3px),
-          linear-gradient(180deg, var(--soil) 0%, var(--soil-dark) 100%);
-      }
-
-      .scene-tree {
-        position: absolute;
-        left: 48px;
-        bottom: 88px;
-        width: 20px;
-        height: 118px;
-        border-radius: 8px;
-        background: #8f2e19;
-        transform: skew(-7deg);
-      }
-
-      .scene-tree::before,
-      .scene-tree::after {
-        content: "";
-        position: absolute;
-        border-radius: 50%;
-        background: #87d43f;
-        box-shadow:
-          -42px 28px 0 0 #7dd03c,
-          30px 34px 0 0 #92dd49,
-          -12px 58px 0 0 #8ad243;
-      }
-
-      .scene-tree::before {
-        top: -10px;
-        left: -10px;
-        width: 72px;
-        height: 58px;
-      }
-
-      .scene-tree::after {
-        top: 34px;
-        left: -28px;
-        width: 60px;
-        height: 42px;
-      }
-
-      .scene-shrub {
-        position: absolute;
-        right: 54px;
-        bottom: 94px;
-        width: 54px;
-        height: 74px;
-        border-radius: 999px 999px 16px 16px;
-        background: linear-gradient(180deg, #4f9b27 0%, #7fd240 100%);
-      }
-
-      .scene-shrub::before,
-      .scene-shrub::after {
-        content: "";
-        position: absolute;
-        border-radius: 50%;
-        background: inherit;
-      }
-
-      .scene-shrub::before {
-        top: -16px;
-        left: 10px;
-        width: 28px;
-        height: 28px;
-      }
-
-      .scene-shrub::after {
-        top: 10px;
-        right: -6px;
-        width: 24px;
-        height: 24px;
-      }
-
-      .scene-console {
-        position: absolute;
-        left: 50%;
-        bottom: 104px;
-        width: 132px;
-        height: 116px;
-        margin-left: -66px;
-        border-radius: 26px;
-        background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(213, 244, 229, 0.84));
-        border: 5px solid rgba(255, 255, 255, 0.72);
-        box-shadow: 0 18px 34px rgba(15, 62, 55, 0.25);
-      }
-
-      .scene-console-screen {
-        position: absolute;
-        inset: 18px;
-        display: grid;
-        place-items: center;
-        border-radius: 18px;
-        background:
-          linear-gradient(180deg, rgba(14, 40, 61, 0.98), rgba(18, 72, 61, 0.96));
-        color: #effaf4;
-        font-family: "SFMono-Regular", "Cascadia Mono", "Menlo", monospace;
-        font-size: 28px;
-        font-weight: 700;
-        letter-spacing: 0.04em;
-      }
-
-      .scene-chip {
-        position: absolute;
-        z-index: 2;
-        padding: 8px 12px;
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.9);
-        color: #18344a;
-        font-size: 11px;
-        font-weight: 800;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }
-
-      .scene-chip.a {
-        top: 16px;
-        left: 16px;
-      }
-
-      .scene-chip.b {
-        right: 16px;
-        bottom: 54px;
-      }
-
-      .scene-cloud {
-        position: absolute;
-        z-index: 1;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        min-width: 118px;
-        min-height: 54px;
-        padding: 10px 16px;
-        border-radius: 999px;
-        background: rgba(65, 60, 80, 0.94);
-        color: #fffaf5;
-        box-shadow:
-          inset 0 -8px 0 rgba(0, 0, 0, 0.18),
-          0 18px 28px rgba(49, 46, 62, 0.28);
-        transform: translate3d(0, 0, 0);
-      }
-
-      .scene-cloud::before,
-      .scene-cloud::after {
-        content: "";
-        position: absolute;
-        border-radius: 50%;
-        background: inherit;
-      }
-
-      .scene-cloud::before {
-        top: -18px;
-        left: 16px;
-        width: 48px;
-        height: 48px;
-      }
-
-      .scene-cloud::after {
-        top: -12px;
-        right: 18px;
-        width: 34px;
-        height: 34px;
-      }
-
-      .scene-cloud.good {
-        background: rgba(42, 110, 78, 0.9);
-      }
-
-      .scene-cloud.medium {
-        background: rgba(136, 96, 18, 0.92);
-      }
-
-      .scene-cloud.danger {
-        background: rgba(101, 61, 77, 0.96);
-      }
-
-      .scene-cloud.low,
-      .scene-cloud.neutral {
-        background: rgba(77, 88, 107, 0.92);
-      }
-
-      .scene-cloud-label {
-        position: relative;
-        z-index: 1;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 2px;
-        text-align: center;
-      }
-
-      .scene-cloud-label strong {
-        font-size: 16px;
-        letter-spacing: -0.02em;
-      }
-
-      .scene-cloud-label span {
-        font-size: 10px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        opacity: 0.85;
-      }
-
-      .scene-note {
-        margin: 14px 2px 0;
-        color: var(--muted);
-        font-size: 13px;
-        line-height: 1.5;
-      }
-
-      .summary-card {
-        display: flex;
-        flex-direction: column;
-        gap: 20px;
-        padding: 24px;
-      }
-
-      .summary-kicker {
-        margin: 0;
-        color: var(--muted);
-        font-size: 11px;
-        font-weight: 800;
-        letter-spacing: 0.14em;
-        text-transform: uppercase;
-      }
-
-      .summary-card h1 {
-        margin: 8px 0 0;
-        font-size: clamp(2.6rem, 4vw, 4.6rem);
-        line-height: 0.96;
-        letter-spacing: -0.06em;
-      }
-
-      .summary-copy {
-        margin: 0;
-        color: var(--muted);
-        font-size: 15px;
-        line-height: 1.6;
-        max-width: 56ch;
-      }
-
-      .summary-path {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
-      }
-
-      .summary-chip {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        padding: 10px 12px;
-        border-radius: 16px;
-        background: rgba(23, 22, 17, 0.05);
-        color: var(--ink);
-        font-size: 12px;
-      }
-
-      .summary-chip strong {
-        color: var(--muted);
-        font-size: 11px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }
-
-      .summary-grid {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 12px;
-      }
-
-      .metric-card {
-        padding: 14px;
-        border-radius: var(--radius-md);
-        border: 1px solid var(--line);
-        background: var(--panel-strong);
-      }
-
-      .metric-card.good {
-        background: linear-gradient(180deg, #f7fff9, #ecfff0);
-      }
-
-      .metric-card.medium {
-        background: linear-gradient(180deg, #fffaf0, #fff1d8);
-      }
-
-      .metric-card.low,
-      .metric-card.neutral {
-        background: linear-gradient(180deg, #fbfcff, #eef4fb);
-      }
-
-      .metric-card.danger {
-        background: linear-gradient(180deg, #fff8fa, #ffe8ec);
-      }
-
-      .metric-label {
-        font-size: 10px;
-        font-weight: 800;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
-        color: var(--muted);
-      }
-
-      .metric-value {
-        margin-top: 8px;
+      .panel-title {
+        margin: 8px 0 4px;
         font-size: 24px;
-        font-weight: 800;
-        letter-spacing: -0.04em;
+        line-height: 1.1;
+        font-weight: 700;
       }
 
-      .metric-note {
-        margin-top: 6px;
-        color: var(--muted);
+      .vsc {
+        background: #1e1e1e;
+        font-family: var(--font-mono);
+        color: #cccccc;
         font-size: 12px;
-        line-height: 1.45;
-      }
-
-      .detail-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: 10px;
-      }
-
-      .detail-tile {
-        padding: 12px 14px;
-        border-radius: var(--radius-md);
-        border: 1px solid var(--line);
-        background: rgba(255, 255, 255, 0.62);
-      }
-
-      .detail-label {
-        font-size: 10px;
-        font-weight: 800;
-        letter-spacing: 0.1em;
-        text-transform: uppercase;
-        color: var(--muted);
-      }
-
-      .detail-value {
-        margin-top: 6px;
-        font-size: 14px;
-        line-height: 1.45;
-        word-break: break-word;
-      }
-
-      .cc-tabs {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px;
-        padding: 0 22px 22px;
-      }
-
-      .cc-tab {
-        appearance: none;
-        border: 1px solid var(--line);
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.78);
-        color: var(--muted);
-        cursor: pointer;
-        font: inherit;
-        font-size: 11px;
-        font-weight: 800;
-        letter-spacing: 0.12em;
-        padding: 11px 16px;
-        text-transform: uppercase;
-        transition: background 150ms ease, color 150ms ease, border-color 150ms ease;
-      }
-
-      .cc-tab[aria-selected="true"] {
-        background: #171611;
-        border-color: #171611;
-        color: #fff9f2;
-      }
-
-      .cc-panels {
-        padding: 0 22px 22px;
-      }
-
-      .cc-panel {
-        display: none;
-        padding: 22px;
-        border: 1px solid var(--line);
-        border-radius: var(--radius-xl);
-        background: rgba(255, 255, 255, 0.66);
-        box-shadow: var(--shadow-soft);
-      }
-
-      .cc-panel.active {
-        display: block;
-      }
-
-      .section-grid {
-        display: grid;
-        grid-template-columns: minmax(0, 1.12fr) minmax(260px, 0.88fr);
-        gap: 20px;
-      }
-
-      .section-card {
-        padding: 18px;
-        border-radius: var(--radius-lg);
-        border: 1px solid var(--line);
-        background: rgba(255, 255, 255, 0.84);
-      }
-
-      .section-kicker {
-        margin: 0;
-        color: var(--muted);
-        font-size: 10px;
-        font-weight: 800;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
-      }
-
-      .section-card h2 {
-        margin: 8px 0 0;
-        font-size: 30px;
-        letter-spacing: -0.04em;
-      }
-
-      .section-subtitle {
-        margin: 10px 0 0;
-        color: var(--muted);
-        font-size: 14px;
-        line-height: 1.6;
-      }
-
-      .smell-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-        gap: 12px;
-        margin-top: 18px;
-      }
-
-      .smell-card {
-        position: relative;
+        border-radius: 8px;
         overflow: hidden;
-        padding: 18px 16px 14px;
-        border-radius: var(--radius-lg);
-        border: 1px solid var(--line);
-        background: rgba(255, 255, 255, 0.95);
       }
 
-      .smell-card::before,
-      .smell-card::after {
-        content: "";
-        position: absolute;
-        inset: auto auto 16px 16px;
-        border-radius: 50%;
-        background: rgba(65, 60, 80, 0.16);
-      }
-
-      .smell-card::before {
-        width: 34px;
+      .vsc-bar {
+        background: #3c3c3c;
         height: 34px;
+        display: flex;
+        align-items: stretch;
+        border-bottom: 1px solid #252526;
       }
 
-      .smell-card::after {
-        left: 34px;
-        bottom: 26px;
+      .vsc-bartab {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0 18px;
+        font-size: 12px;
+        color: #cccccc;
+        border-right: 1px solid #252526;
+        border-top: 2px solid #0078d4;
+        background: #1e1e1e;
+      }
+
+      .vsc-barspace {
+        flex: 1;
+      }
+
+      .vsc-actions {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 0 10px;
+      }
+
+      .vsc-btn {
         width: 24px;
         height: 24px;
+        background: #333333;
+        border: 1px solid #444444;
+        border-radius: 3px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        color: #aaaaaa;
+        font-size: 11px;
       }
 
-      .smell-card.good::before,
-      .smell-card.good::after {
-        background: rgba(28, 124, 79, 0.18);
+      .vsc-btn:hover,
+      .vsc-btn:focus-visible {
+        border-color: #0078d4;
+        color: #ffffff;
+        outline: none;
       }
 
-      .smell-card.medium::before,
-      .smell-card.medium::after {
-        background: rgba(156, 102, 0, 0.2);
-      }
-
-      .smell-card.danger::before,
-      .smell-card.danger::after {
-        background: rgba(188, 76, 87, 0.18);
-      }
-
-      .smell-card.low::before,
-      .smell-card.low::after,
-      .smell-card.neutral::before,
-      .smell-card.neutral::after {
-        background: rgba(41, 71, 104, 0.14);
-      }
-
-      .smell-rule {
+      .sky {
+        background: #0d1117;
         position: relative;
-        z-index: 1;
-        font-size: 12px;
-        font-weight: 800;
+        height: 268px;
+        overflow: hidden;
+        border-bottom: 1px solid #161b22;
+      }
+
+      @keyframes f1 {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-7px); }
+      }
+
+      @keyframes f2 {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-5px); }
+      }
+
+      @keyframes f3 {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-9px); }
+      }
+
+      .cld {
+        position: absolute;
+        cursor: pointer;
+        border: 0;
+        background: transparent;
+        padding: 0;
+        color: inherit;
+      }
+
+      .cld:nth-child(1) {
+        animation: f1 4.2s ease-in-out infinite;
+      }
+
+      .cld:nth-child(2) {
+        animation: f2 5.5s ease-in-out infinite 0.8s;
+      }
+
+      .cld:nth-child(3) {
+        animation: f1 6s ease-in-out infinite 1.6s;
+      }
+
+      .cld:nth-child(4) {
+        animation: f3 4.8s ease-in-out infinite 0.4s;
+      }
+
+      .cld:nth-child(5) {
+        animation: f2 5.2s ease-in-out infinite 1.2s;
+      }
+
+      .cld:hover svg,
+      .cld:focus-visible svg,
+      .cld:hover .cloud-shape,
+      .cld:focus-visible .cloud-shape {
+        opacity: 0.8;
+      }
+
+      .cld:focus-visible {
+        outline: 1px solid #0078d4;
+        outline-offset: 4px;
+      }
+
+      .sky-hint {
+        position: absolute;
+        bottom: 6px;
+        left: 12px;
+        font-size: 10px;
+        color: #30363d;
+        letter-spacing: 0.06em;
+        font-family: var(--font-mono);
+      }
+
+      .cloud-png {
+        position: relative;
+        display: block;
+        width: var(--cloud-width);
+        height: var(--cloud-height);
+      }
+
+      .cloud-shape {
+        position: absolute;
+        inset: 0;
+        background: #3d4451;
+        -webkit-mask: var(--cloud-image) center / contain no-repeat;
+        mask: var(--cloud-image) center / contain no-repeat;
+        transition: opacity 140ms ease;
+      }
+
+      .cloud-text {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding-top: var(--cloud-text-shift);
+        pointer-events: none;
+        text-align: center;
+        font-family: monospace;
+      }
+
+      .cloud-rule {
+        color: #8b9cb3;
+        font-size: var(--cloud-rule-size);
+        letter-spacing: var(--cloud-letter-spacing);
+        line-height: 1.1;
+        text-transform: uppercase;
+      }
+
+      .cloud-count {
+        margin-top: 3px;
+        color: var(--cloud-accent);
+        font-size: var(--cloud-count-size);
+        font-weight: 500;
+        line-height: 1;
+      }
+
+      .cloud-meta {
+        margin-top: 5px;
+        color: #8b9cb3;
+        font-size: var(--cloud-meta-size);
+        line-height: 1;
+      }
+
+      .tabs {
+        display: flex;
+        background: #252526;
+        border-bottom: 1px solid #3e3e3e;
+        padding: 0 12px;
+        overflow-x: auto;
+      }
+
+      .tab {
+        padding: 7px 14px;
+        font-size: 11px;
+        color: #858585;
+        cursor: pointer;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        background: transparent;
         letter-spacing: 0.05em;
         text-transform: uppercase;
-      }
-
-      .smell-count {
-        position: relative;
-        z-index: 1;
-        margin-top: 12px;
-        font-size: 28px;
-        font-weight: 800;
-        letter-spacing: -0.04em;
-      }
-
-      .smell-meta {
-        position: relative;
-        z-index: 1;
-        margin-top: 6px;
-        color: var(--muted);
-        font-size: 12px;
-      }
-
-      .detail-list {
-        display: grid;
-        gap: 10px;
-        margin-top: 18px;
-      }
-
-      .detail-row {
-        display: flex;
-        align-items: flex-start;
-        justify-content: space-between;
-        gap: 18px;
-        padding: 12px 14px;
-        border-radius: var(--radius-md);
-        background: rgba(255, 255, 255, 0.7);
-        border: 1px solid var(--line);
-      }
-
-      .detail-row span:first-child {
-        color: var(--muted);
-        font-size: 12px;
-        font-weight: 700;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-      }
-
-      .detail-row span:last-child {
-        max-width: 65%;
-        text-align: right;
-        font-size: 13px;
-        line-height: 1.45;
-        word-break: break-word;
-      }
-
-      .issue-list {
-        display: grid;
-        gap: 14px;
-      }
-
-      .issue-group {
-        padding: 16px;
-        border-radius: var(--radius-lg);
-        border: 1px solid var(--line);
-        background: rgba(255, 255, 255, 0.84);
-      }
-
-      .issue-group-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 16px;
-        padding-bottom: 12px;
-        border-bottom: 1px solid var(--line);
-      }
-
-      .issue-group-title {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        min-width: 0;
-      }
-
-      .issue-dot {
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
-        flex-shrink: 0;
-      }
-
-      .issue-dot.good {
-        background: var(--good);
-      }
-
-      .issue-dot.medium {
-        background: var(--warn);
-      }
-
-      .issue-dot.low,
-      .issue-dot.neutral {
-        background: var(--neutral);
-      }
-
-      .issue-dot.danger {
-        background: var(--danger);
-      }
-
-      .issue-rule {
-        font-size: 14px;
-        font-weight: 800;
-      }
-
-      .issue-count {
-        font-size: 12px;
-        color: var(--muted);
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-      }
-
-      .issue-items {
-        display: grid;
-        gap: 10px;
-        margin-top: 14px;
-      }
-
-      .issue-item {
-        display: grid;
-        grid-template-columns: auto minmax(0, 1fr);
-        gap: 10px;
-        padding: 12px 0;
-        border-bottom: 1px solid rgba(23, 22, 17, 0.06);
-      }
-
-      .issue-item:last-child {
-        border-bottom: none;
-        padding-bottom: 0;
-      }
-
-      .issue-location {
-        min-width: 78px;
-        color: var(--muted);
-        font-family: "SFMono-Regular", "Cascadia Mono", "Menlo", monospace;
-        font-size: 12px;
         white-space: nowrap;
       }
 
-      .issue-message {
-        font-size: 13px;
-        line-height: 1.55;
+      .tab:hover,
+      .tab:focus-visible {
+        color: #cccccc;
+        outline: none;
       }
 
-      .history-landscape {
-        position: relative;
-        height: 42px;
-        margin-bottom: 18px;
-        overflow: hidden;
-        border-radius: 18px;
-        background: linear-gradient(180deg, #c2f1ff 0%, #e8fbff 100%);
+      .tab.on {
+        color: #cccccc;
+        border-bottom-color: #0078d4;
       }
 
-      .history-landscape::before {
-        content: "";
-        position: absolute;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        height: 14px;
-        background: #6fc43a;
+      .body {
+        padding: 14px;
       }
 
-      .history-landscape::after {
-        content: "";
-        position: absolute;
-        left: 0;
-        right: 0;
-        bottom: 14px;
-        height: 2px;
-        background: rgba(255, 255, 255, 0.8);
+      .sec {
+        display: none;
       }
 
-      .history-list {
-        display: grid;
-        gap: 12px;
+      .sec.on {
+        display: block;
       }
 
-      .history-item {
-        display: grid;
-        grid-template-columns: 38px minmax(0, 1fr) auto;
-        gap: 14px;
-        align-items: center;
-        padding: 14px 16px;
-        border-radius: var(--radius-lg);
-        border: 1px solid var(--line);
-        background: rgba(255, 255, 255, 0.84);
-      }
-
-      .history-index {
-        display: grid;
-        place-items: center;
-        width: 38px;
-        height: 38px;
-        border-radius: 12px;
-        background: rgba(23, 22, 17, 0.06);
-        color: var(--muted);
-        font-size: 12px;
-        font-weight: 800;
-      }
-
-      .history-file {
-        font-size: 14px;
-        font-weight: 700;
-        line-height: 1.45;
-        word-break: break-word;
-      }
-
-      .history-date {
-        margin-top: 4px;
-        color: var(--muted);
-        font-size: 12px;
-      }
-
-      .history-pills {
+      .file-row {
         display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-        margin-top: 8px;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 14px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid #2d2d2d;
+        min-width: 0;
       }
 
-      .history-pill {
-        display: inline-flex;
-        align-items: center;
-        padding: 4px 8px;
-        border-radius: 999px;
-        border: 1px solid var(--line);
-        color: var(--muted);
+      .file-name {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 11px;
+        color: #4ec9b0;
+      }
+
+      .file-tag {
+        flex: 0 0 auto;
         font-size: 10px;
+        padding: 2px 7px;
+        border-radius: 3px;
         letter-spacing: 0.04em;
       }
 
-      .history-right {
+      .tag-good {
+        background: #1b2a1b;
+        color: #4caf50;
+        border: 1px solid #2d5a2d;
+      }
+
+      .tag-warn {
+        background: #2a2000;
+        color: #fbbf24;
+        border: 1px solid #5a4200;
+      }
+
+      .tag-bad {
+        background: #2a1b1b;
+        color: #e57373;
+        border: 1px solid #5a2d2d;
+      }
+
+      .mgrid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        margin-bottom: 14px;
+      }
+
+      .mc {
+        background: #252526;
+        border: 1px solid #2d2d2d;
+        border-left: 2px solid;
+        padding: 10px 12px;
+        border-radius: 4px;
+        min-width: 0;
+      }
+
+      .mc-lbl {
+        font-size: 9px;
+        color: #858585;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 4px;
+      }
+
+      .mc-val {
+        font-size: 15px;
+        font-weight: 500;
+        overflow-wrap: anywhere;
+      }
+
+      .mc-sub {
+        font-size: 9px;
+        color: #5a5a5a;
+        margin-top: 2px;
+      }
+
+      .sec-hd {
+        font-size: 9px;
+        color: #858585;
+        text-transform: uppercase;
+        letter-spacing: 0.09em;
+        margin-bottom: 8px;
+      }
+
+      .kv-block {
+        background: #252526;
+        border: 1px solid #2d2d2d;
+        border-radius: 4px;
+        padding: 10px 12px;
+      }
+
+      .kv {
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 4px 0;
+        border-bottom: 0.5px solid #2a2a2a;
+        font-size: 11px;
+      }
+
+      .kv:last-child {
+        border-bottom: none;
+      }
+
+      .kk {
+        color: #858585;
+        flex: 0 0 auto;
+      }
+
+      .kv-val {
+        color: #cccccc;
         text-align: right;
+        max-width: 65%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        overflow-wrap: anywhere;
       }
 
-      .history-emission {
-        font-size: 14px;
-        font-weight: 800;
+      .status-good {
+        color: #4ec9b0;
       }
 
-      .history-status {
-        margin-top: 4px;
-        font-size: 12px;
+      .status-medium {
+        color: #fbbf24;
       }
 
-      .history-status.good {
-        color: var(--good);
+      .status-low {
+        color: #fb923c;
       }
 
-      .history-status.medium {
-        color: var(--warn);
+      .status-danger {
+        color: #f87171;
       }
 
-      .history-status.low,
-      .history-status.neutral {
-        color: var(--neutral);
+      .status-neutral {
+        color: #cccccc;
       }
 
-      .history-status.danger {
-        color: var(--danger);
+      .itbl {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
       }
 
-      .output-grid {
-        display: grid;
-        grid-template-columns: minmax(0, 0.86fr) minmax(280px, 1.14fr);
-        gap: 20px;
+      .itbl th {
+        font-size: 9px;
+        color: #858585;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        padding: 6px 8px;
+        text-align: left;
+        border-bottom: 1px solid #2d2d2d;
+        font-weight: 400;
       }
 
-      .output-list {
-        display: grid;
-        gap: 10px;
-        margin-top: 18px;
-      }
-
-      .output-line {
-        padding: 12px 14px;
-        border-radius: var(--radius-md);
-        border: 1px solid var(--line);
-        background: rgba(255, 255, 255, 0.82);
-        font-family: "SFMono-Regular", "Cascadia Mono", "Menlo", monospace;
-        font-size: 12px;
-        line-height: 1.55;
+      .itbl td {
+        font-size: 11px;
+        color: #b0b0b0;
+        padding: 7px 8px;
+        border-bottom: 0.5px solid #222222;
+        vertical-align: top;
         word-break: break-word;
       }
 
-      details {
-        overflow: hidden;
-        border-radius: var(--radius-lg);
-        border: 1px solid var(--line);
-        background: rgba(255, 255, 255, 0.84);
+      .itbl tr:hover td {
+        background: #252526;
       }
 
-      details + details {
-        margin-top: 12px;
+      .bdg {
+        display: inline-block;
+        font-size: 9px;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-weight: 500;
+        white-space: nowrap;
       }
 
-      summary {
-        cursor: pointer;
-        padding: 14px 16px;
-        font-size: 12px;
-        font-weight: 800;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
+      .bdg.danger {
+        background: #3d1a00;
+        color: #f97316;
+        border: 1px solid #7c2d12;
       }
 
-      pre {
-        margin: 0;
-        padding: 0 16px 16px;
+      .bdg.medium {
+        background: #2a2000;
+        color: #fbbf24;
+        border: 1px solid #5a4200;
+      }
+
+      .bdg.low {
+        background: #3d1a00;
+        color: #fb923c;
+        border: 1px solid #7c3a00;
+      }
+
+      .bdg.neutral,
+      .bdg.good {
+        background: #172333;
+        color: #569cd6;
+        border: 1px solid #254664;
+      }
+
+      .line-muted {
+        color: #5a5a5a;
+      }
+
+      .empty-row {
+        color: #858585;
+        text-align: center;
+      }
+
+      .hi {
+        display: grid;
+        grid-template-columns: 22px minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: start;
+        padding: 10px 0;
+        border-bottom: 0.5px solid #222222;
+      }
+
+      .hi:last-child {
+        border-bottom: none;
+      }
+
+      .hn {
+        width: 20px;
+        height: 20px;
+        background: #2a2a2a;
+        border-radius: 3px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 9px;
+        color: #858585;
+      }
+
+      .hf {
+        font-size: 11px;
+        color: #4ec9b0;
+        margin-bottom: 2px;
+        overflow-wrap: anywhere;
+      }
+
+      .hd {
+        font-size: 9px;
+        color: #5a5a5a;
+        margin-bottom: 4px;
+      }
+
+      .hps {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 3px;
+      }
+
+      .hp {
+        font-size: 9px;
+        padding: 1px 5px;
+        border-radius: 2px;
+        background: #2a2a2a;
+        color: #858585;
+        border: 0.5px solid #333333;
+      }
+
+      .hr-val {
+        font-size: 10px;
+        color: #cccccc;
+        font-family: var(--font-mono);
+        text-align: right;
+        white-space: nowrap;
+      }
+
+      .hr-st {
+        font-size: 9px;
+        text-align: right;
+        margin-top: 2px;
+      }
+
+      .out-block {
+        background: #161616;
+        border: 1px solid #2d2d2d;
+        border-radius: 4px;
+        padding: 12px;
+        font-size: 10px;
+        line-height: 1.9;
+        color: #9ca3af;
+        font-family: var(--font-mono);
         overflow-x: auto;
+      }
+
+      .out-line {
+        min-height: 19px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+
+      .out-command {
+        color: #6e6e6e;
+      }
+
+      .out-ok {
+        color: #4ec9b0;
+      }
+
+      .out-text {
+        color: #cccccc;
+      }
+
+      .raw-details {
+        margin-top: 12px;
+        color: #858585;
+      }
+
+      .raw-details summary {
+        cursor: pointer;
+        margin-bottom: 8px;
+      }
+
+      .raw-details pre {
+        max-height: 340px;
+        overflow: auto;
         white-space: pre-wrap;
         word-break: break-word;
-        color: #edf7f2;
-        font-family: "SFMono-Regular", "Cascadia Mono", "Menlo", monospace;
-        font-size: 12px;
+        color: #9ca3af;
+        font-family: var(--font-mono);
+        font-size: 10px;
         line-height: 1.6;
-        background: linear-gradient(180deg, #112432 0%, #17363c 100%);
       }
 
-      .empty-state {
-        padding: 18px;
-        border-radius: var(--radius-lg);
-        border: 1px dashed rgba(23, 22, 17, 0.14);
-        background: rgba(255, 255, 255, 0.58);
-        color: var(--muted);
-        font-size: 13px;
-        line-height: 1.55;
-      }
+      @media (max-width: 720px) {
+        body {
+          padding: 0 0 32px;
+        }
 
-      @media (max-width: 1160px) {
-        .cc-hero,
-        .section-grid,
-        .output-grid {
+        .panel-title {
+          padding: 0 8px;
+          font-size: 19px;
+        }
+
+        .sky {
+          height: 330px;
+        }
+
+        .mgrid {
           grid-template-columns: 1fr;
         }
 
-        .summary-grid {
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-        }
-      }
-
-      @media (max-width: 760px) {
-        main {
-          padding: 16px;
-        }
-
-        .cc-header,
-        .cc-hero,
-        .cc-tabs,
-        .cc-panels {
-          padding-left: 16px;
-          padding-right: 16px;
-        }
-
-        .cc-header {
-          flex-direction: column;
+        .file-row {
           align-items: flex-start;
+          flex-wrap: wrap;
         }
 
-        .summary-grid {
-          grid-template-columns: 1fr;
+        .kv {
+          display: grid;
+          gap: 2px;
         }
 
-        .detail-grid {
-          grid-template-columns: 1fr;
-        }
-
-        .history-item {
-          grid-template-columns: 1fr;
-        }
-
-        .history-right {
+        .kv-val {
+          max-width: none;
           text-align: left;
         }
 
-        .issue-item {
-          grid-template-columns: 1fr;
+        .hi {
+          grid-template-columns: 22px minmax(0, 1fr);
         }
 
-        .scene {
-          min-height: 320px;
+        .hi > :last-child {
+          grid-column: 2;
+        }
+
+        .hr-val,
+        .hr-st {
+          text-align: left;
         }
       }
     </style>
   </head>
   <body>
-    <main>
-      <div class="cc-shell">
-        <header class="cc-header">
-          <div class="cc-brand">
-            <div class="cc-brand-mark" aria-hidden="true">
-              <span class="cc-brand-cloud a"></span>
-              <span class="cc-brand-cloud b"></span>
-              <span class="cc-brand-cloud c"></span>
-            </div>
-            <div>
-              <p class="cc-title">Carbon Cleaner</p>
-              <p class="cc-subtitle">Retro carbon-cloud analysis for PyGreenSense output and history</p>
-            </div>
+    <h1 class="panel-title">PyGreenSense VS Code panel &mdash; carbon cloud visualization with code smell sizes, issues table, and run history</h1>
+    <div class="vsc">
+      <div class="vsc-bar">
+        <div class="vsc-bartab">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <circle cx="8" cy="8" r="6" stroke="#4ec9b0" stroke-width="1.5"/>
+            <path d="M8 5v4l2 2" stroke="#4ec9b0" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+          PyGreenSense Report
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="margin-left:4px;opacity:0.5;" aria-hidden="true">
+            <line x1="2" y1="2" x2="10" y2="10" stroke="#ccc" stroke-width="1.5"/>
+            <line x1="10" y1="2" x2="2" y2="10" stroke="#ccc" stroke-width="1.5"/>
+          </svg>
+        </div>
+        <div class="vsc-barspace"></div>
+        <div class="vsc-actions">
+          <button class="vsc-btn" type="button" title="Copy summary prompt" data-prompt="${escapeHtml(summaryPrompt)}">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+              <circle cx="5" cy="5" r="4" stroke="currentColor" stroke-width="1"/>
+              <line x1="5" y1="3" x2="5" y2="7" stroke="currentColor" stroke-width="1"/>
+              <line x1="3" y1="5" x2="7" y2="5" stroke="currentColor" stroke-width="1"/>
+            </svg>
+          </button>
+          <button class="vsc-btn" type="button" title="Show output" data-tab-jump="output">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+              <path d="M2 5h6M5 2l3 3-3 3" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="sky">
+        ${renderCloudMap(smellSummaries, issueGroups)}
+        <div class="sky-hint">cloud size reflects issue count &middot; click a cloud to copy a fix prompt</div>
+      </div>
+
+      <div class="tabs" role="tablist" aria-label="PyGreenSense report sections">
+        <button class="tab on" type="button" role="tab" aria-selected="true" data-tab-button="analysis">Analysis</button>
+        <button class="tab" type="button" role="tab" aria-selected="false" data-tab-button="issues">Issues (${escapeHtml(String(issueCount))})</button>
+        <button class="tab" type="button" role="tab" aria-selected="false" data-tab-button="history">History</button>
+        <button class="tab" type="button" role="tab" aria-selected="false" data-tab-button="output">Output</button>
+      </div>
+
+      <div class="body">
+        <section id="s-analysis" class="sec on" role="tabpanel" data-tab-panel="analysis">
+          <div class="file-row">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <rect x="2" y="1" width="9" height="12" rx="1" stroke="#4ec9b0" stroke-width="1"/>
+              <line x1="4" y1="5" x2="9" y2="5" stroke="#4ec9b0" stroke-width="1"/>
+              <line x1="4" y1="7.5" x2="9" y2="7.5" stroke="#4ec9b0" stroke-width="1"/>
+              <line x1="4" y1="10" x2="7" y2="10" stroke="#4ec9b0" stroke-width="1"/>
+            </svg>
+            <span class="file-name" title="${escapeHtml(targetPath)}">${escapeHtml(path.basename(targetPath))}</span>
+            <span class="file-tag tag-good">${escapeHtml(workspaceLabel)}</span>
+            <span class="file-tag ${statusTone === 'danger' ? 'tag-bad' : statusTone === 'medium' ? 'tag-warn' : 'tag-good'}">${escapeHtml(statusLabel)}</span>
+            <span class="file-tag tag-bad">${escapeHtml(String(issueCount))} smells</span>
           </div>
-          <div class="cc-status-badge ${getToneClass(statusTone)}">${escapeHtml(statusLabel)}</div>
-        </header>
-
-        <section class="cc-hero">
-          <article class="hero-card scene-card">
-            <div class="scene" aria-label="Carbon clouds above the current code run">
-              <div class="scene-chip a">Cloud map</div>
-              <div class="scene-chip b">${escapeHtml(String(issueCount))} issues</div>
-              ${renderSceneClouds(smellSummaries)}
-              <div class="scene-tree" aria-hidden="true"></div>
-              <div class="scene-shrub" aria-hidden="true"></div>
-              <div class="scene-console" aria-hidden="true">
-                <div class="scene-console-screen">&lt;/&gt;</div>
-              </div>
-              <div class="scene-ground" aria-hidden="true"></div>
-              <div class="scene-soil" aria-hidden="true"></div>
-            </div>
-            <p class="scene-note">
-              ${escapeHtml(runSummary)}
-            </p>
-          </article>
-
-          <article class="hero-card summary-card">
-            <div>
-              <p class="summary-kicker">Current target</p>
-              <h1>${escapeHtml(path.basename(targetPath))}</h1>
-            </div>
-            <p class="summary-copy">
-              The panel follows the same structure as your sample files: detailed issue groups from the terminal-style report,
-              a persistent run timeline from <code>history.json</code>, and a focused carbon-cloud scene inspired by your concept slide.
-            </p>
-            <div class="summary-path">
-              <span class="summary-chip"><strong>File</strong>${escapeHtml(targetLabel)}</span>
-              <span class="summary-chip"><strong>Workspace</strong>${escapeHtml(workspaceLabel)}</span>
-              <span class="summary-chip"><strong>History</strong>${escapeHtml(data.history.foundPath ? 'Synced' : 'Missing')}</span>
-            </div>
-            <div class="summary-grid">
-              ${metrics.map(renderMetricCard).join('')}
-            </div>
-            <div class="detail-grid">
-              ${detailRows.map(renderDetailTile).join('')}
-            </div>
-          </article>
+          <div class="mgrid">
+            ${metrics.map(renderMetricCard).join('')}
+          </div>
+          <div class="sec-hd">Execution details</div>
+          <div class="kv-block">
+            ${detailRows.map(renderDetailRow).join('')}
+          </div>
         </section>
 
-        <nav class="cc-tabs" aria-label="Carbon Cleaner sections">
-          <button class="cc-tab" data-tab-button="analysis" aria-selected="true">Analysis</button>
-          <button class="cc-tab" data-tab-button="issues" aria-selected="false">Issues</button>
-          <button class="cc-tab" data-tab-button="history" aria-selected="false">History</button>
-          <button class="cc-tab" data-tab-button="output" aria-selected="false">Output</button>
-        </nav>
-
-        <section class="cc-panels">
-          <div class="cc-panel active" data-tab-panel="analysis">
-            <div class="section-grid">
-              <article class="section-card">
-                <p class="section-kicker">Carbon clouds</p>
-                <h2>Issue types in the current sky</h2>
-                <p class="section-subtitle">
-                  Each cloud below is built from the latest run summary and backed by the smell breakdown saved in history when it exists.
-                </p>
-                ${
-                  smellSummaries.length > 0
-                    ? `<div class="smell-grid">${smellSummaries.map(renderSmellCard).join('')}</div>`
-                    : renderEmptyState('No smell summary is available yet. Run PyGreenSense on a file to populate the cloud cards.')
-                }
-              </article>
-
-              <article class="section-card">
-                <p class="section-kicker">Run details</p>
-                <h2>Live report metadata</h2>
-                <p class="section-subtitle">
-                  These values are blended from the latest CLI output and the newest history entry so the panel stays useful even when one source is missing.
-                </p>
-                <div class="detail-list">
-                  ${getAnalysisDetailRows(data, latestMetric, parsedReport).map(renderDetailRow).join('')}
-                </div>
-              </article>
-            </div>
+        <section id="s-issues" class="sec" role="tabpanel" data-tab-panel="issues">
+          <div style="overflow-x:auto;">
+            <table class="itbl">
+              <colgroup><col style="width:124px"/><col style="width:64px"/><col/></colgroup>
+              <thead>
+                <tr><th>Rule</th><th>Line</th><th>Message</th></tr>
+              </thead>
+              <tbody>
+                ${renderIssueTableRows(issueGroups, shouldShowIssueFilePaths(issueGroups))}
+              </tbody>
+            </table>
           </div>
+        </section>
 
-          <div class="cc-panel" data-tab-panel="issues">
-            <article class="section-card">
-              <p class="section-kicker">Detected issues</p>
-              <h2>Line-by-line output list</h2>
-              <p class="section-subtitle">
-                This section follows the structure of the terminal report, grouping every detected issue by smell type and preserving line references.
-              </p>
-              ${
-                issueGroups.length > 0
-                  ? `<div class="issue-list">${issueGroups
-                      .map(group => renderIssueGroup(group, showIssueFilePaths))
-                      .join('')}</div>`
-                  : renderEmptyState('No issue groups were parsed from the latest run output.')
-              }
-            </article>
+        <section id="s-history" class="sec" role="tabpanel" data-tab-panel="history">
+          ${renderHistoryList(historyEntries, data.workspaceRoot)}
+        </section>
+
+        <section id="s-output" class="sec" role="tabpanel" data-tab-panel="output">
+          <div class="sec-hd">Program output (last run)</div>
+          <div class="out-block">
+            ${renderProgramOutput(programOutputLines, data.runResult.code)}
           </div>
-
-          <div class="cc-panel" data-tab-panel="history">
-            <article class="section-card">
-              <p class="section-kicker">Run history</p>
-              <h2>Saved emissions timeline</h2>
-              <p class="section-subtitle">
-                The history list is built from <code>history.json</code> and shows the newest saved runs first, with status, emissions, and smell tags.
-              </p>
-              <div class="history-landscape" aria-hidden="true"></div>
-              ${
-                historyEntries.length > 0
-                  ? `<div class="history-list">${historyEntries
-                      .slice()
-                      .reverse()
-                      .map((entry, index) => renderHistoryItem(entry, index, data.workspaceRoot))
-                      .join('')}</div>`
-                  : renderEmptyState(
-                      'No history entries were found. The extension can still show the latest terminal output, but the timeline will appear after a run writes history.json.'
-                    )
-              }
-            </article>
-          </div>
-
-          <div class="cc-panel" data-tab-panel="output">
-            <div class="output-grid">
-              <article class="section-card">
-                <p class="section-kicker">Program output</p>
-                <h2>What the last run printed</h2>
-                <p class="section-subtitle">
-                  This list is taken from the "Program output" block in the CLI report, which keeps the panel aligned with the raw terminal text.
-                </p>
-                ${
-                  programOutputLines.length > 0
-                    ? `<div class="output-list">${programOutputLines.map(renderOutputLine).join('')}</div>`
-                    : renderEmptyState('No dedicated program output block was detected in the latest run.')
-                }
-              </article>
-
-              <article class="section-card">
-                <p class="section-kicker">Raw capture</p>
-                <h2>Full stdout, stderr, and history JSON</h2>
-                <p class="section-subtitle">
-                  Keep the structured list above for browsing, then expand the raw sections when you need the original report text.
-                </p>
-                ${
-                  rawOutput
-                    ? `<details open>
-                        <summary>Latest stdout</summary>
-                        <pre>${escapeHtml(stdout || 'No stdout captured.')}</pre>
-                      </details>`
-                    : renderEmptyState('No stdout was captured for the latest run.')
-                }
-                ${
-                  stderr
-                    ? `<details>
-                        <summary>Latest stderr</summary>
-                        <pre>${escapeHtml(stderr)}</pre>
-                      </details>`
-                    : ''
-                }
-                ${
-                  historyJson
-                    ? `<details>
-                        <summary>Persisted history.json snapshot</summary>
-                        <pre>${escapeHtml(historyJson)}</pre>
-                      </details>`
-                    : ''
-                }
-              </article>
-            </div>
-          </div>
+          ${
+            rawOutput
+              ? `<details class="raw-details">
+                  <summary>Raw capture</summary>
+                  <pre>${escapeHtml(stdout || stderr)}</pre>
+                </details>`
+              : ''
+          }
         </section>
       </div>
-    </main>
+    </div>
 
     <script nonce="${nonce}">
+      const vscode = acquireVsCodeApi();
       const tabButtons = Array.from(document.querySelectorAll('[data-tab-button]'));
       const tabPanels = Array.from(document.querySelectorAll('[data-tab-panel]'));
 
       function activateTab(name) {
         tabButtons.forEach((button) => {
           const isActive = button.dataset.tabButton === name;
+          button.classList.toggle('on', isActive);
           button.setAttribute('aria-selected', String(isActive));
         });
 
         tabPanels.forEach((panel) => {
-          panel.classList.toggle('active', panel.dataset.tabPanel === name);
+          panel.classList.toggle('on', panel.dataset.tabPanel === name);
         });
       }
 
       tabButtons.forEach((button) => {
-        button.addEventListener('click', () => {
-          activateTab(button.dataset.tabButton);
+        button.addEventListener('click', () => activateTab(button.dataset.tabButton));
+      });
+
+      document.querySelectorAll('[data-tab-jump]').forEach((button) => {
+        button.addEventListener('click', () => activateTab(button.dataset.tabJump));
+      });
+
+      document.querySelectorAll('[data-prompt]').forEach((element) => {
+        element.addEventListener('click', () => {
+          vscode.postMessage({
+            type: 'copyPrompt',
+            prompt: element.dataset.prompt || ''
+          });
         });
       });
 
@@ -1498,96 +926,60 @@ function getMetricCards({
   parsedReport,
   historyRunCount,
   issueCount,
+  issueTypeCount,
 }: {
   latestMetric: HistoryMetric | null;
-  parsedReport: ReturnType<typeof parsePyGreenSenseReport>;
+  parsedReport: ParsedReport;
   historyRunCount: number;
   issueCount: number;
+  issueTypeCount: number;
 }): MetricCard[] {
-  const emissionKg = firstDefinedNumber(
-    parsedReport.emissionKg,
-    normalizeHistoryEmissionKg(latestMetric)
-  );
+  const emissionKg = firstDefinedNumber(parsedReport.emissionKg, normalizeHistoryEmissionKg(latestMetric));
   const cfp = firstDefinedNumber(parsedReport.cfp, latestMetric?.cfp);
   const loc = firstDefinedNumber(parsedReport.loc, latestMetric?.lines_of_code);
-  const runCountLabel = historyRunCount > 0 ? `${historyRunCount} saved run${historyRunCount === 1 ? '' : 's'}` : 'Waiting for history sync';
+  const issueFileCount = parsedReport.issueFileCount ?? 1;
 
   return [
     {
-      label: 'Carbon',
-      value: formatScientificNumber(emissionKg, ' kg CO2'),
-      note: latestMetric?.region ? `${latestMetric.region} grid` : 'From latest CLI report',
-      tone: emissionKg !== null && emissionKg > 0 ? 'medium' : 'neutral',
+      label: 'Carbon emission',
+      value: formatScientificNumber(emissionKg, ''),
+      note: `kg CO2 - ${firstNonEmpty(parsedReport.region, latestMetric?.region) ?? 'latest'} grid`,
+      tone: 'danger',
     },
     {
       label: 'Issues',
       value: String(issueCount),
-      note: parsedReport.issueFileCount ? `${parsedReport.issueFileCount} file(s) with detections` : 'Parsed from report output',
-      tone: issueCount > 0 ? 'danger' : 'good',
+      note: `in ${issueFileCount} file${issueFileCount === 1 ? '' : 's'} - ${issueTypeCount} type${issueTypeCount === 1 ? '' : 's'}`,
+      tone: 'medium',
     },
     {
       label: 'CFP',
       value: formatCompactNumber(cfp),
-      note: cfp !== null ? 'COSMIC function points' : 'Not present in latest run',
-      tone: cfp !== null ? 'neutral' : 'low',
+      note: 'COSMIC function pts',
+      tone: 'neutral',
     },
     {
       label: 'LOC',
       value: formatCompactNumber(loc),
-      note: loc !== null ? runCountLabel : 'No LOC value captured',
-      tone: loc !== null ? 'good' : 'neutral',
+      note: historyRunCount > 0 ? `${historyRunCount} saved run${historyRunCount === 1 ? '' : 's'}` : '5 iterations avg',
+      tone: 'good',
     },
   ];
 }
 
-function getDetailRows({
-  data,
-  latestMetric,
-  parsedReport,
-  historyEntries,
-}: {
-  data: PyGreenSenseResultsViewModel;
-  latestMetric: HistoryMetric | null;
-  parsedReport: ReturnType<typeof parsePyGreenSenseReport>;
-  historyEntries: HistoryMetric[];
-}): DetailRow[] {
-  return [
-    {
-      label: 'History runs',
-      value: String(historyEntries.length),
-    },
-    {
-      label: 'Iterations',
-      value: parsedReport.iterations !== null ? `${parsedReport.iterations} runs averaged` : 'Not reported',
-    },
-    {
-      label: 'History path',
-      value: data.history.foundPath ?? 'No history.json found',
-    },
-    {
-      label: 'Exit code',
-      value: String(data.runResult.code),
-    },
-    {
-      label: 'Trend',
-      value: formatTrend(latestMetric?.status, latestMetric?.improvement_percent),
-    },
-    {
-      label: 'Country',
-      value: firstNonEmpty(parsedReport.country, latestMetric?.country_name) ?? 'Not reported',
-    },
-  ];
-}
-
-function getAnalysisDetailRows(
+function getDetailRows(
   data: PyGreenSenseResultsViewModel,
   latestMetric: HistoryMetric | null,
-  parsedReport: ReturnType<typeof parsePyGreenSenseReport>
+  parsedReport: ParsedReport
 ): DetailRow[] {
+  const statusLabel = firstNonEmpty(latestMetric?.status, parsedReport.currentRunStatus) ?? (data.runResult.code === 0 ? 'Run complete' : 'Run failed');
+  const statusTone = getStatusTone(statusLabel, data.runResult.code);
+
   return [
     {
-      label: 'Target file',
-      value: firstNonEmpty(parsedReport.targetFile, latestMetric?.target_file, data.targetFile) ?? data.targetFile,
+      label: 'Status',
+      value: statusLabel,
+      tone: statusTone,
     },
     {
       label: 'Duration',
@@ -1606,27 +998,19 @@ function getAnalysisDetailRows(
     },
     {
       label: 'Region',
-      value: firstNonEmpty(parsedReport.region, latestMetric?.region) ?? 'Not reported',
-    },
-    {
-      label: 'Country',
-      value: firstNonEmpty(parsedReport.country, latestMetric?.country_name) ?? 'Not reported',
-    },
-    {
-      label: 'Status',
-      value: firstNonEmpty(latestMetric?.status, parsedReport.currentRunStatus) ?? 'Run complete',
+      value: formatRegion(firstNonEmpty(parsedReport.region, latestMetric?.region), firstNonEmpty(parsedReport.country, latestMetric?.country_name)),
     },
     {
       label: 'SCI / line',
       value: formatScientificNumber(latestMetric?.sci_gCO2eq_per_line ?? null, ' gCO2eq'),
     },
     {
-      label: 'Improvement',
-      value: formatPercent(latestMetric?.improvement_percent ?? null),
+      label: 'SCI / CFP',
+      value: formatScientificNumber(latestMetric?.sci_per_cfp ?? null, ' gCO2eq/CFP'),
     },
     {
-      label: 'History source',
-      value: data.history.foundPath ?? 'Missing',
+      label: 'Iterations',
+      value: parsedReport.iterations !== null ? `${parsedReport.iterations} runs` : 'Not reported',
     },
   ];
 }
@@ -1689,120 +1073,194 @@ function buildFallbackIssueGroups(smells: SmellSummary[]): ParsedIssueGroup[] {
 }
 
 function renderMetricCard(card: MetricCard): string {
-  return `<div class="metric-card ${getToneClass(card.tone)}">
-    <div class="metric-label">${escapeHtml(card.label)}</div>
-    <div class="metric-value">${escapeHtml(card.value)}</div>
-    <div class="metric-note">${escapeHtml(card.note)}</div>
-  </div>`;
-}
-
-function renderDetailTile(row: DetailRow): string {
-  return `<div class="detail-tile">
-    <div class="detail-label">${escapeHtml(row.label)}</div>
-    <div class="detail-value">${escapeHtml(row.value)}</div>
-  </div>`;
-}
-
-function renderSmellCard(smell: SmellSummary): string {
-  const locLabel = smell.loc !== null ? `${smell.loc} LOC affected` : 'LOC not provided';
-  const issueLabel = `${smell.count} issue${smell.count === 1 ? '' : 's'}`;
-  return `<div class="smell-card ${getToneClass(smell.severity)}">
-    <div class="smell-rule">${escapeHtml(formatRuleLabel(smell.rule))}</div>
-    <div class="smell-count">${escapeHtml(issueLabel)}</div>
-    <div class="smell-meta">${escapeHtml(locLabel)}</div>
+  const color = getToneAccent(card.tone);
+  return `<div class="mc" style="border-left-color:${color};">
+    <div class="mc-lbl">${escapeHtml(card.label)}</div>
+    <div class="mc-val" style="color:${color};">${escapeHtml(card.value)}</div>
+    <div class="mc-sub">${escapeHtml(card.note)}</div>
   </div>`;
 }
 
 function renderDetailRow(row: DetailRow): string {
-  return `<div class="detail-row">
-    <span>${escapeHtml(row.label)}</span>
-    <span>${escapeHtml(row.value)}</span>
-  </div>`;
+  const statusClass = row.tone ? ` status-${getToneClass(row.tone)}` : '';
+  return `<div class="kv"><span class="kk">${escapeHtml(row.label)}</span><span class="kv-val${statusClass}" title="${escapeHtml(row.value)}">${escapeHtml(row.value)}</span></div>`;
 }
 
-function renderIssueGroup(group: ParsedIssueGroup, showIssueFilePaths: boolean): string {
-  const issueMarkup =
-    group.issues.length > 0
-      ? `<div class="issue-items">${group.issues.map(issue => renderIssueItem(issue, showIssueFilePaths)).join('')}</div>`
-      : `<div class="empty-state">Detailed line messages were not available for this smell in the latest output, but the count was still recovered from the saved metrics.</div>`;
+function renderIssueTableRows(issueGroups: ParsedIssueGroup[], showIssueFilePaths: boolean): string {
+  const rows = issueGroups.flatMap(group => {
+    if (group.issues.length === 0) {
+      return [renderIssueRow(group, null, showIssueFilePaths)];
+    }
 
-  return `<div class="issue-group">
-    <div class="issue-group-header">
-      <div class="issue-group-title">
-        <span class="issue-dot ${getToneClass(group.severity)}" aria-hidden="true"></span>
-        <div>
-          <div class="issue-rule">${escapeHtml(formatRuleLabel(group.rule))}</div>
-          <div class="issue-count">${escapeHtml(String(group.count))} issue${group.count === 1 ? '' : 's'}</div>
-        </div>
-      </div>
-    </div>
-    ${issueMarkup}
-  </div>`;
-}
-
-function renderIssueItem(issue: ParsedIssue, showIssueFilePaths: boolean): string {
-  return `<div class="issue-item">
-    <div class="issue-location">${escapeHtml(formatIssueLocation(issue, showIssueFilePaths))}</div>
-    <div class="issue-message">${escapeHtml(issue.message)}</div>
-  </div>`;
-}
-
-function renderHistoryItem(entry: HistoryMetric, index: number, workspaceRoot: string): string {
-  const smellEntries = Object.entries(entry.smell_breakdown ?? {})
-    .sort(([, left], [, right]) => (right.count ?? 0) - (left.count ?? 0));
-  const visiblePills = smellEntries.slice(0, 3).map(([rule, smell]) => {
-    const count = smell.count ?? 0;
-    return `<span class="history-pill">${escapeHtml(`${formatRuleLabel(rule)}${count > 1 ? ` x${count}` : ''}`)}</span>`;
+    return group.issues.map(issue => renderIssueRow(group, issue, showIssueFilePaths));
   });
-  if (smellEntries.length > 3) {
-    visiblePills.push(`<span class="history-pill">+${smellEntries.length - 3} more</span>`);
+
+  if (rows.length === 0) {
+    return '<tr><td class="empty-row" colspan="3">No issues were parsed from the latest run.</td></tr>';
   }
 
+  return rows.join('');
+}
+
+function renderIssueRow(group: ParsedIssueGroup, issue: ParsedIssue | null, showIssueFilePaths: boolean): string {
+  const line = issue ? formatIssueLocation(issue, showIssueFilePaths) : '-';
+  const message = issue?.message ?? `${group.count} issue${group.count === 1 ? '' : 's'} detected. Line details were not available in the latest output.`;
+
+  return `<tr>
+    <td><span class="bdg ${getToneClass(group.severity)}">${escapeHtml(formatRuleLabel(group.rule))}</span></td>
+    <td class="line-muted">${escapeHtml(line)}</td>
+    <td>${escapeHtml(message)}</td>
+  </tr>`;
+}
+
+function renderHistoryList(historyEntries: HistoryMetric[], workspaceRoot: string): string {
+  if (historyEntries.length === 0) {
+    return '<div class="out-block">No history entries were found yet.</div>';
+  }
+
+  return `<div>${historyEntries
+    .slice()
+    .reverse()
+    .map((entry, index) => renderHistoryItem(entry, index, historyEntries.length, workspaceRoot))
+    .join('')}</div>`;
+}
+
+function renderHistoryItem(entry: HistoryMetric, reverseIndex: number, total: number, workspaceRoot: string): string {
   const tone = getStatusTone(entry.status ?? '', 0);
-  return `<div class="history-item">
-    <div class="history-index">${String(index + 1).padStart(2, '0')}</div>
+  const indexLabel = String(entry.id ?? total - reverseIndex);
+  const pills = renderHistoryPills(entry.smell_breakdown);
+
+  return `<div class="hi">
+    <div class="hn">${escapeHtml(indexLabel)}</div>
     <div>
-      <div class="history-file">${escapeHtml(formatPathForDisplay(entry.target_file ?? 'Unknown target', workspaceRoot))}</div>
-      <div class="history-date">${escapeHtml(formatDate(entry.date_time ?? null))}</div>
-      <div class="history-pills">${visiblePills.join('') || '<span class="history-pill">No smell breakdown</span>'}</div>
+      <div class="hf">${escapeHtml(formatPathForDisplay(entry.target_file ?? 'Unknown target', workspaceRoot))}</div>
+      <div class="hd">${escapeHtml(formatDate(entry.date_time ?? null))}</div>
+      <div class="hps">${pills}</div>
     </div>
-    <div class="history-right">
-      <div class="history-emission">${escapeHtml(formatScientificNumber(normalizeHistoryEmissionKg(entry), ' kg CO2'))}</div>
-      <div class="history-status ${getToneClass(tone)}">${escapeHtml(formatTrend(entry.status, entry.improvement_percent))}</div>
+    <div>
+      <div class="hr-val">${escapeHtml(formatScientificNumber(normalizeHistoryEmissionKg(entry), ' kg'))}</div>
+      <div class="hr-st status-${getToneClass(tone)}">${escapeHtml(formatTrend(entry.status, entry.improvement_percent))}</div>
     </div>
   </div>`;
 }
 
-function renderOutputLine(line: string): string {
-  return `<div class="output-line">${escapeHtml(line)}</div>`;
-}
+function renderHistoryPills(smellBreakdown: Record<string, SmellBreakdownEntry> | undefined): string {
+  const smellEntries = Object.entries(smellBreakdown ?? {}).sort(([, left], [, right]) => (right.count ?? 0) - (left.count ?? 0));
 
-function renderSceneClouds(smells: SmellSummary[]): string {
-  const cloudSlots = [
-    { left: '12%', top: '26%', size: 'large' },
-    { left: '42%', top: '14%', size: 'medium' },
-    { left: '66%', top: '40%', size: 'large' },
-    { left: '28%', top: '50%', size: 'medium' },
-  ];
-  const cloudSource = smells.length > 0 ? smells.slice(0, cloudSlots.length) : [{ rule: 'CleanSky', count: 0, loc: null, severity: 'good' as const }];
+  if (smellEntries.length === 0) {
+    return '<span class="hp">No smell breakdown</span>';
+  }
 
-  return cloudSource
-    .map((smell, index) => {
-      const slot = cloudSlots[index % cloudSlots.length];
-      const ruleLabel = smell.rule === 'CleanSky' ? 'Clear sky' : formatRuleLabel(smell.rule);
-      const countLabel = smell.rule === 'CleanSky' ? 'No issues' : `${smell.count} issue${smell.count === 1 ? '' : 's'}`;
-      return `<div class="scene-cloud ${getToneClass(smell.severity)} ${slot.size}" style="left:${slot.left}; top:${slot.top};">
-        <div class="scene-cloud-label">
-          <strong>${escapeHtml(ruleLabel)}</strong>
-          <span>${escapeHtml(countLabel)}</span>
-        </div>
-      </div>`;
+  return smellEntries
+    .map(([rule, smell]) => {
+      const count = smell.count ?? 0;
+      return `<span class="hp">${escapeHtml(`${formatRuleCompactLabel(rule)}${count > 1 ? ` x${count}` : ''}`)}</span>`;
     })
     .join('');
 }
 
-function renderEmptyState(message: string): string {
-  return `<div class="empty-state">${escapeHtml(message)}</div>`;
+function renderProgramOutput(lines: string[], exitCode: number): string {
+  const renderedLines =
+    lines.length > 0
+      ? lines.map((line, index) => `<div class="out-line ${index < 3 ? 'out-ok' : 'out-text'}">${escapeHtml(line)}</div>`).join('')
+      : '<div class="out-line">No dedicated program output block was detected in the latest run.</div>';
+
+  return `<div class="out-line out-command">$ pygreensense</div>${renderedLines}<div class="out-line out-command">Exit code: ${escapeHtml(String(exitCode))}</div>`;
+}
+
+function renderCloudMap(smells: SmellSummary[], issueGroups: ParsedIssueGroup[]): string {
+  const cloudSlots = [
+    { position: 'left:6%;top:22px;', width: 200, height: 110, variant: 'large' as const },
+    { position: 'right:4%;top:8px;', width: 158, height: 90, variant: 'medium' as const },
+    { position: 'left:28%;bottom:48px;', width: 158, height: 90, variant: 'medium' as const },
+    { position: 'left:50%;top:10px;', width: 114, height: 70, variant: 'small' as const },
+    { position: 'right:24%;bottom:44px;', width: 114, height: 70, variant: 'small' as const },
+  ];
+  const cloudSource =
+    smells.length > 0
+      ? smells.slice(0, cloudSlots.length)
+      : [{ rule: 'CleanSky', count: 0, loc: null, severity: 'good' as const }];
+
+  return cloudSource
+    .map((smell, index) => {
+      const slot = cloudSlots[index] ?? cloudSlots[cloudSlots.length - 1];
+      const matchingGroup = issueGroups.find(group => group.rule === smell.rule);
+      const prompt = buildSmellPrompt(smell, matchingGroup);
+      return `<button class="cld" type="button" style="${slot.position}" title="Copy fix prompt for ${escapeHtml(formatRuleLabel(smell.rule))}" data-prompt="${escapeHtml(prompt)}">
+        ${renderCloudPng(smell, slot.width, slot.height, slot.variant)}
+      </button>`;
+    })
+    .join('');
+}
+
+function renderCloudPng(smell: SmellSummary, width: number, height: number, variant: 'large' | 'medium' | 'small'): string {
+  const label = formatCloudRuleLabel(smell.rule);
+  const countLabel = smell.rule === 'CleanSky' ? 'OK' : String(smell.count);
+  const issueLabel = `${smell.count} issue${smell.count === 1 ? '' : 's'}`;
+  const locLabel = smell.loc !== null ? `${smell.loc} LOC` : issueLabel;
+  const largeMetaLabel = smell.loc !== null ? `${issueLabel} - ${locLabel}` : issueLabel;
+  const accent = getRuleAccent(smell.rule, smell.severity);
+  const dimensions = getCloudTextDimensions(variant);
+
+  return `<span
+    class="cloud-png"
+    style="--cloud-width:${width}px;--cloud-height:${height}px;--cloud-accent:${accent};--cloud-rule-size:${dimensions.ruleSize}px;--cloud-count-size:${dimensions.countSize}px;--cloud-meta-size:${dimensions.metaSize}px;--cloud-letter-spacing:${dimensions.letterSpacing}px;--cloud-text-shift:${dimensions.textShift}px;"
+    aria-hidden="true"
+  >
+    <span class="cloud-shape"></span>
+    <span class="cloud-text">
+      <span class="cloud-rule">${escapeHtml(label)}</span>
+      <span class="cloud-count">${escapeHtml(countLabel)}</span>
+      <span class="cloud-meta">${escapeHtml(variant === 'large' ? largeMetaLabel : locLabel)}</span>
+    </span>
+  </span>`;
+}
+
+function getCloudTextDimensions(variant: 'large' | 'medium' | 'small'): {
+  ruleSize: number;
+  countSize: number;
+  metaSize: number;
+  letterSpacing: number;
+  textShift: number;
+} {
+  if (variant === 'large') {
+    return { ruleSize: 10, countSize: 26, metaSize: 9, letterSpacing: 1.5, textShift: 10 };
+  }
+
+  if (variant === 'medium') {
+    return { ruleSize: 8.5, countSize: 22, metaSize: 9, letterSpacing: 0.8, textShift: 8 };
+  }
+
+  return { ruleSize: 7.5, countSize: 18, metaSize: 8, letterSpacing: 0.5, textShift: 6 };
+}
+
+function buildSummaryPrompt(targetLabel: string, issueCount: number, smells: SmellSummary[]): string {
+  const smellText =
+    smells.length > 0
+      ? smells.map(smell => `${formatRuleLabel(smell.rule)}: ${smell.count} issue${smell.count === 1 ? '' : 's'}`).join(', ')
+      : 'no code smell issues';
+
+  return `Help me prioritize PyGreenSense fixes for ${targetLabel}. It reported ${issueCount} issue${issueCount === 1 ? '' : 's'}: ${smellText}.`;
+}
+
+function buildSmellPrompt(smell: SmellSummary, group: ParsedIssueGroup | undefined): string {
+  if (smell.rule === 'CleanSky') {
+    return 'PyGreenSense found no code smells. Suggest a short checklist for keeping this Python file energy-efficient and maintainable.';
+  }
+
+  const issueDetails = group?.issues
+    .slice(0, 3)
+    .map(issue => `${formatIssueLocation(issue, false)}: ${issue.message}`)
+    .join(' ');
+  const locText = smell.loc !== null ? ` affecting about ${smell.loc} LOC` : '';
+  const detailText = issueDetails ? ` Examples: ${issueDetails}` : '';
+
+  return `How do I fix ${smell.count} ${formatRuleLabel(smell.rule)} issue${smell.count === 1 ? '' : 's'} in Python${locText}?${detailText}`;
+}
+
+function countIssueTypes(latestMetric: HistoryMetric | null, parsedReport: ParsedReport): number {
+  const historyTypes = Object.keys(latestMetric?.smell_breakdown ?? {}).length;
+  return historyTypes > 0 ? historyTypes : parsedReport.issueGroups.length;
 }
 
 function shouldShowIssueFilePaths(issueGroups: ParsedIssueGroup[]): boolean {
@@ -1815,8 +1273,17 @@ function shouldShowIssueFilePaths(issueGroups: ParsedIssueGroup[]): boolean {
   return filePaths.size > 1;
 }
 
+function isPromptMessage(message: unknown): message is PromptMessage {
+  if (!message || typeof message !== 'object') {
+    return false;
+  }
+
+  const candidate = message as Partial<PromptMessage>;
+  return candidate.type === 'copyPrompt' && typeof candidate.prompt === 'string';
+}
+
 function getRuleSeverity(rule: string, count: number): ParsedSeverity {
-  const normalized = rule.replace(/[\s_-]+/g, '').toLowerCase();
+  const normalized = normalizeRule(rule);
 
   if (normalized.includes('godclass') || normalized.includes('deadcode') || normalized.includes('leak')) {
     return 'danger';
@@ -1866,27 +1333,42 @@ function getToneClass(tone: ParsedSeverity): string {
   return tone;
 }
 
-function getRunSummaryText({
-  issueCount,
-  statusLabel,
-  targetLabel,
-  historyCount,
-}: {
-  issueCount: number;
-  statusLabel: string;
-  targetLabel: string;
-  historyCount: number;
-}): string {
-  const issueCopy =
-    issueCount === 0 ? 'No carbon clouds were detected in this run.' : `${issueCount} carbon-cloud issue${issueCount === 1 ? '' : 's'} are hovering over ${targetLabel}.`;
-  const historyCopy =
-    historyCount > 0 ? `History already holds ${historyCount} saved run${historyCount === 1 ? '' : 's'}.` : 'History has not been saved yet.';
-  return `${issueCopy} Current status: ${statusLabel}. ${historyCopy}`;
+function getToneAccent(tone: ParsedSeverity): string {
+  switch (tone) {
+    case 'good':
+      return '#4ec9b0';
+    case 'medium':
+      return '#fbbf24';
+    case 'low':
+      return '#fb923c';
+    case 'danger':
+      return '#f87171';
+    case 'neutral':
+    default:
+      return '#569cd6';
+  }
+}
+
+function getRuleAccent(rule: string, tone: ParsedSeverity): string {
+  const normalized = normalizeRule(rule);
+  if (normalized.includes('godclass')) {
+    return '#a78bfa';
+  }
+
+  if (normalized.includes('longmethod')) {
+    return '#38bdf8';
+  }
+
+  if (normalized.includes('duplicated') || normalized.includes('mutabledefault')) {
+    return '#fbbf24';
+  }
+
+  return getToneAccent(tone);
 }
 
 function formatIssueLocation(issue: ParsedIssue, showIssueFilePaths: boolean): string {
   const fileLabel = showIssueFilePaths && issue.filePath ? `${path.basename(issue.filePath)}:` : '';
-  const lineLabel = issue.line !== null ? `L${issue.line}` : 'Line ?';
+  const lineLabel = issue.line !== null ? String(issue.line) : '-';
   return `${fileLabel}${lineLabel}`;
 }
 
@@ -1905,6 +1387,33 @@ function formatPathForDisplay(targetPath: string, workspaceRoot: string): string
 
 function formatRuleLabel(rule: string): string {
   return rule.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
+}
+
+function formatRuleCompactLabel(rule: string): string {
+  const compact = rule.replace(/\s+/g, '');
+  return compact.length > 22 ? `${compact.slice(0, 19)}...` : compact;
+}
+
+function formatCloudRuleLabel(rule: string): string {
+  const normalized = normalizeRule(rule);
+  const labels: Record<string, string> = {
+    cleansky: 'CLEAR SKY',
+    deadcode: 'DEAD CODE',
+    duplicatedcode: 'DUPLICATED',
+    godclass: 'GOD CLASS',
+    longmethod: 'LONG METHOD',
+    mutabledefaultarguments: 'MUTABLE ARGS',
+  };
+
+  return labels[normalized] ?? truncateCloudLabel(formatRuleLabel(rule).toUpperCase());
+}
+
+function truncateCloudLabel(label: string): string {
+  return label.length > 14 ? `${label.slice(0, 11)}...` : label;
+}
+
+function normalizeRule(rule: string): string {
+  return rule.replace(/[\s_-]+/g, '').toLowerCase();
 }
 
 function formatDate(value: string | null): string {
@@ -1948,7 +1457,7 @@ function formatDuration(value: number | null): string {
     return '0.00 s';
   }
 
-  if (value < 0.01) {
+  if (Math.abs(value) < 0.01) {
     return value.toExponential(2).replace('e+', 'e');
   }
 
@@ -1987,11 +1496,23 @@ function formatScientificNumber(value: number | null, suffix: string): string {
   }
 
   if (Math.abs(value) < 0.01 || Math.abs(value) >= 1000) {
-    return `${value.toExponential(2).replace('e+', 'e')}${suffix}`;
+    return `${value.toExponential(3).replace('e+', 'e')}${suffix}`;
   }
 
   const digits = Math.abs(value) < 10 ? 4 : 2;
   return `${value.toFixed(digits)}${suffix}`;
+}
+
+function formatRegion(region: string | null, country: string | null): string {
+  if (region && country) {
+    return `${capitalize(region)}, ${country}`;
+  }
+
+  return region ?? country ?? 'Not reported';
+}
+
+function capitalize(value: string): string {
+  return value.length === 0 ? value : `${value[0].toUpperCase()}${value.slice(1)}`;
 }
 
 function normalizeHistoryEmissionKg(metric: HistoryMetric | null): number | null {
