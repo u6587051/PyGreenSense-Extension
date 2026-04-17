@@ -105,6 +105,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 			const history = readHistoryJson(globalStoragePath, workspaceRoot);
 			showPyGreenSenseResultsPanel({
+				extensionUri: context.extensionUri,
 				targetFile: targetPath,
 				workspaceRoot,
 				history,
