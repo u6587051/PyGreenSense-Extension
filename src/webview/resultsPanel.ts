@@ -136,12 +136,9 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
       http-equiv="Content-Security-Policy"
       content="default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';"
     />
-    <title>PyGreenSense VS Code panel</title>
+    <title>PyGreenSense Report</title>
     <style>
       :root {
-        color-scheme: light dark;
-        --font-mono: var(--vscode-editor-font-family, "SFMono-Regular", "Cascadia Mono", "Menlo", monospace);
-        --font-ui: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
         --cloud-image: url("${cloudImageUri}");
       }
 
@@ -152,87 +149,28 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
       }
 
       body {
-        min-height: 100vh;
-        padding: 0 6px 48px;
-        background: #ffffff;
-        color: #111111;
-        font-family: Georgia, "Times New Roman", serif;
+        padding: 20px;
+        background-color: var(--vscode-editor-background);
+        color: var(--vscode-editor-foreground);
+        font-family: var(--vscode-font-family, sans-serif);
+        font-size: var(--vscode-font-size, 13px);
       }
 
       .panel-title {
-        margin: 8px 0 4px;
-        font-size: 24px;
-        line-height: 1.1;
+        margin: 0 0 16px 0;
+        font-size: 1.5em;
         font-weight: 700;
-      }
-
-      .vsc {
-        background: #1e1e1e;
-        font-family: var(--font-mono);
-        color: #cccccc;
-        font-size: 12px;
-        border-radius: 8px;
-        overflow: hidden;
-      }
-
-      .vsc-bar {
-        background: #3c3c3c;
-        height: 34px;
-        display: flex;
-        align-items: stretch;
-        border-bottom: 1px solid #252526;
-      }
-
-      .vsc-bartab {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 0 18px;
-        font-size: 12px;
-        color: #cccccc;
-        border-right: 1px solid #252526;
-        border-top: 2px solid #0078d4;
-        background: #1e1e1e;
-      }
-
-      .vsc-barspace {
-        flex: 1;
-      }
-
-      .vsc-actions {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        padding: 0 10px;
-      }
-
-      .vsc-btn {
-        width: 24px;
-        height: 24px;
-        background: #333333;
-        border: 1px solid #444444;
-        border-radius: 3px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
-        color: #aaaaaa;
-        font-size: 11px;
-      }
-
-      .vsc-btn:hover,
-      .vsc-btn:focus-visible {
-        border-color: #0078d4;
-        color: #ffffff;
-        outline: none;
+        color: var(--vscode-editor-foreground);
       }
 
       .sky {
-        background: #0d1117;
+        background: var(--vscode-editorWidget-background);
+        border: 1px solid var(--vscode-widget-border, #444);
+        border-radius: 6px;
         position: relative;
         height: 268px;
         overflow: hidden;
-        border-bottom: 1px solid #161b22;
+        margin-bottom: 20px;
       }
 
       @keyframes f1 {
@@ -287,18 +225,17 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
       }
 
       .cld:focus-visible {
-        outline: 1px solid #0078d4;
+        outline: 1px solid var(--vscode-focusBorder);
         outline-offset: 4px;
       }
 
       .sky-hint {
         position: absolute;
-        bottom: 6px;
+        bottom: 8px;
         left: 12px;
-        font-size: 10px;
-        color: #30363d;
-        letter-spacing: 0.06em;
-        font-family: var(--font-mono);
+        font-size: 0.85em;
+        color: var(--vscode-descriptionForeground);
+        letter-spacing: 0.04em;
       }
 
       .cloud-png {
@@ -311,7 +248,7 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
       .cloud-shape {
         position: absolute;
         inset: 0;
-        background: #3d4451;
+        background: var(--vscode-editor-foreground, #3d4451);
         -webkit-mask: var(--cloud-image) center / contain no-repeat;
         mask: var(--cloud-image) center / contain no-repeat;
         transition: opacity 140ms ease;
@@ -327,15 +264,16 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
         padding-top: var(--cloud-text-shift);
         pointer-events: none;
         text-align: center;
-        font-family: monospace;
+        font-family: var(--vscode-editor-font-family, monospace);
       }
 
       .cloud-rule {
-        color: #8b9cb3;
+        color: var(--vscode-editor-background);
         font-size: var(--cloud-rule-size);
         letter-spacing: var(--cloud-letter-spacing);
         line-height: 1.1;
         text-transform: uppercase;
+        mix-blend-mode: difference;
       }
 
       .cloud-count {
@@ -344,49 +282,68 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
         font-size: var(--cloud-count-size);
         font-weight: 500;
         line-height: 1;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.5);
       }
 
       .cloud-meta {
         margin-top: 5px;
-        color: #8b9cb3;
+        color: var(--vscode-editor-background);
         font-size: var(--cloud-meta-size);
         line-height: 1;
+        mix-blend-mode: difference;
       }
 
       .tabs {
         display: flex;
-        background: #252526;
-        border-bottom: 1px solid #3e3e3e;
-        padding: 0 12px;
-        overflow-x: auto;
+        border-bottom: 1px solid var(--vscode-panel-border, #444);
+        margin-bottom: 16px;
+        align-items: center;
       }
 
       .tab {
-        padding: 7px 14px;
-        font-size: 11px;
-        color: #858585;
+        padding: 8px 16px;
+        font-size: 1em;
+        color: var(--vscode-panelTitle-inactiveForeground, #888);
         cursor: pointer;
         border: 0;
         border-bottom: 2px solid transparent;
         background: transparent;
-        letter-spacing: 0.05em;
         text-transform: uppercase;
-        white-space: nowrap;
       }
 
       .tab:hover,
       .tab:focus-visible {
-        color: #cccccc;
+        color: var(--vscode-panelTitle-activeForeground, #ccc);
         outline: none;
       }
 
       .tab.on {
-        color: #cccccc;
-        border-bottom-color: #0078d4;
+        color: var(--vscode-panelTitle-activeForeground, #ccc);
+        border-bottom-color: var(--vscode-panelTitle-activeBorder, #0078d4);
       }
 
-      .body {
-        padding: 14px;
+      .toolbar-actions {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .icon-btn {
+        background: transparent;
+        border: none;
+        color: var(--vscode-icon-foreground, #ccc);
+        cursor: pointer;
+        padding: 4px;
+        border-radius: 4px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .icon-btn:hover {
+        background: var(--vscode-toolbar-hoverBackground, rgba(255,255,255,0.1));
+        color: var(--vscode-toolbar-hoverOutline, #fff);
       }
 
       .sec {
@@ -401,9 +358,9 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
         display: flex;
         align-items: center;
         gap: 8px;
-        margin-bottom: 14px;
-        padding-bottom: 10px;
-        border-bottom: 1px solid #2d2d2d;
+        margin-bottom: 16px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid var(--vscode-panel-border, #444);
         min-width: 0;
       }
 
@@ -412,83 +369,66 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        font-size: 11px;
-        color: #4ec9b0;
+        font-size: 0.95em;
+        color: var(--vscode-textLink-foreground, #4ec9b0);
       }
 
       .file-tag {
         flex: 0 0 auto;
-        font-size: 10px;
-        padding: 2px 7px;
+        font-size: 0.85em;
+        padding: 2px 6px;
         border-radius: 3px;
-        letter-spacing: 0.04em;
       }
 
-      .tag-good {
-        background: #1b2a1b;
-        color: #4caf50;
-        border: 1px solid #2d5a2d;
-      }
-
-      .tag-warn {
-        background: #2a2000;
-        color: #fbbf24;
-        border: 1px solid #5a4200;
-      }
-
-      .tag-bad {
-        background: #2a1b1b;
-        color: #e57373;
-        border: 1px solid #5a2d2d;
-      }
+      .tag-good { background: var(--vscode-testing-iconPassed, #4ec9b0); color: var(--vscode-editor-background, #111); }
+      .tag-warn { background: var(--vscode-problemsWarningIcon-foreground, #fbbf24); color: var(--vscode-editor-background, #111); }
+      .tag-bad { background: var(--vscode-problemsErrorIcon-foreground, #f87171); color: var(--vscode-editor-background, #111); }
 
       .mgrid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 8px;
-        margin-bottom: 14px;
+        gap: 12px;
+        margin-bottom: 20px;
       }
 
       .mc {
-        background: #252526;
-        border: 1px solid #2d2d2d;
+        background: var(--vscode-editorWidget-background, #252526);
+        border: 1px solid var(--vscode-widget-border, #444);
         border-left: 2px solid;
-        padding: 10px 12px;
+        padding: 12px;
         border-radius: 4px;
         min-width: 0;
       }
 
       .mc-lbl {
-        font-size: 9px;
-        color: #858585;
+        font-size: 0.85em;
+        color: var(--vscode-descriptionForeground, #aaa);
         text-transform: uppercase;
-        letter-spacing: 0.08em;
         margin-bottom: 4px;
       }
 
       .mc-val {
-        font-size: 15px;
+        font-size: 1.5em;
         font-weight: 500;
         overflow-wrap: anywhere;
       }
 
       .mc-sub {
-        font-size: 9px;
-        color: #5a5a5a;
-        margin-top: 2px;
+        font-size: 0.85em;
+        color: var(--vscode-descriptionForeground, #aaa);
+        margin-top: 4px;
       }
 
       .sec-hd {
-        font-size: 9px;
-        color: #858585;
+        font-size: 0.9em;
+        color: var(--vscode-descriptionForeground, #aaa);
         text-transform: uppercase;
-        letter-spacing: 0.09em;
         margin-bottom: 8px;
       }
 
       .kv-block {
-        background: #252526;
-        border: 1px solid #2d2d2d;
+        background: var(--vscode-editorWidget-background, #252526);
+        border: 1px solid var(--vscode-widget-border, #444);
         border-radius: 4px;
         padding: 10px 12px;
       }
@@ -496,10 +436,10 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
       .kv {
         display: flex;
         justify-content: space-between;
-        gap: 18px;
-        padding: 4px 0;
-        border-bottom: 0.5px solid #2a2a2a;
-        font-size: 11px;
+        gap: 16px;
+        padding: 6px 0;
+        border-bottom: 1px solid var(--vscode-widget-border, #444);
+        font-size: 0.95em;
       }
 
       .kv:last-child {
@@ -507,12 +447,12 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
       }
 
       .kk {
-        color: #858585;
+        color: var(--vscode-descriptionForeground, #aaa);
         flex: 0 0 auto;
       }
 
       .kv-val {
-        color: #cccccc;
+        color: var(--vscode-foreground, #ccc);
         text-align: right;
         max-width: 65%;
         overflow: hidden;
@@ -520,25 +460,11 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
         overflow-wrap: anywhere;
       }
 
-      .status-good {
-        color: #4ec9b0;
-      }
-
-      .status-medium {
-        color: #fbbf24;
-      }
-
-      .status-low {
-        color: #fb923c;
-      }
-
-      .status-danger {
-        color: #f87171;
-      }
-
-      .status-neutral {
-        color: #cccccc;
-      }
+      .status-good { color: var(--vscode-testing-iconPassed, #4ec9b0); }
+      .status-medium { color: var(--vscode-problemsWarningIcon-foreground, #fbbf24); }
+      .status-low { color: var(--vscode-problemsInfoIcon-foreground, #fb923c); }
+      .status-danger { color: var(--vscode-problemsErrorIcon-foreground, #f87171); }
+      .status-neutral { color: var(--vscode-foreground, #ccc); }
 
       .itbl {
         width: 100%;
@@ -547,79 +473,59 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
       }
 
       .itbl th {
-        font-size: 9px;
-        color: #858585;
+        font-size: 0.85em;
+        color: var(--vscode-descriptionForeground, #aaa);
         text-transform: uppercase;
-        letter-spacing: 0.08em;
-        padding: 6px 8px;
+        padding: 8px;
         text-align: left;
-        border-bottom: 1px solid #2d2d2d;
-        font-weight: 400;
+        border-bottom: 1px solid var(--vscode-panel-border, #444);
+        font-weight: normal;
       }
 
       .itbl td {
-        font-size: 11px;
-        color: #b0b0b0;
-        padding: 7px 8px;
-        border-bottom: 0.5px solid #222222;
+        font-size: 0.95em;
+        color: var(--vscode-foreground, #ccc);
+        padding: 8px;
+        border-bottom: 1px solid var(--vscode-widget-border, #333);
         vertical-align: top;
         word-break: break-word;
       }
 
       .itbl tr:hover td {
-        background: #252526;
+        background: var(--vscode-list-hoverBackground, #2a2d2e);
       }
 
       .bdg {
         display: inline-block;
-        font-size: 9px;
+        font-size: 0.85em;
         padding: 2px 6px;
         border-radius: 3px;
-        font-weight: 500;
         white-space: nowrap;
+        background: var(--vscode-badge-background, #333);
+        color: var(--vscode-badge-foreground, #fff);
+        border: 1px solid var(--vscode-contrastBorder, transparent);
       }
 
-      .bdg.danger {
-        background: #3d1a00;
-        color: #f97316;
-        border: 1px solid #7c2d12;
-      }
-
-      .bdg.medium {
-        background: #2a2000;
-        color: #fbbf24;
-        border: 1px solid #5a4200;
-      }
-
-      .bdg.low {
-        background: #3d1a00;
-        color: #fb923c;
-        border: 1px solid #7c3a00;
-      }
-
-      .bdg.neutral,
-      .bdg.good {
-        background: #172333;
-        color: #569cd6;
-        border: 1px solid #254664;
-      }
+      .bdg.danger { background: var(--vscode-inputValidation-errorBackground, #5a1d1d); border-color: var(--vscode-inputValidation-errorBorder, #be1100); color: var(--vscode-foreground, #fff); }
+      .bdg.medium { background: var(--vscode-inputValidation-warningBackground, #352a05); border-color: var(--vscode-inputValidation-warningBorder, #b89500); color: var(--vscode-foreground, #fff); }
+      .bdg.low { background: var(--vscode-inputValidation-infoBackground, #063b49); border-color: var(--vscode-inputValidation-infoBorder, #007acc); color: var(--vscode-foreground, #fff); }
 
       .line-muted {
-        color: #5a5a5a;
+        color: var(--vscode-descriptionForeground, #aaa);
       }
 
       .empty-row {
-        color: #858585;
+        color: var(--vscode-descriptionForeground, #aaa);
         text-align: center;
       }
 
       .hi {
         display: grid;
-        grid-template-columns: 22px minmax(0, 1fr) auto;
-        gap: 10px;
+        grid-template-columns: 24px minmax(0, 1fr) auto;
+        gap: 12px;
         align-items: start;
-        padding: 10px 0;
-        border-bottom: 0.5px solid #222222;
+        padding: 12px 0;
+        border-bottom: 1px solid var(--vscode-widget-border, #444);
       }
 
       .hi:last-child {
@@ -627,92 +533,92 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
       }
 
       .hn {
-        width: 20px;
-        height: 20px;
-        background: #2a2a2a;
-        border-radius: 3px;
+        width: 24px;
+        height: 24px;
+        background: var(--vscode-badge-background, #444);
+        color: var(--vscode-badge-foreground, #fff);
+        border-radius: 4px;
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 9px;
-        color: #858585;
+        font-size: 0.85em;
       }
 
       .hf {
-        font-size: 11px;
-        color: #4ec9b0;
+        font-size: 0.95em;
+        color: var(--vscode-textLink-foreground, #4ec9b0);
         margin-bottom: 2px;
         overflow-wrap: anywhere;
       }
 
       .hd {
-        font-size: 9px;
-        color: #5a5a5a;
-        margin-bottom: 4px;
+        font-size: 0.85em;
+        color: var(--vscode-descriptionForeground, #aaa);
+        margin-bottom: 6px;
       }
 
       .hps {
         display: flex;
         flex-wrap: wrap;
-        gap: 3px;
+        gap: 4px;
       }
 
       .hp {
-        font-size: 9px;
-        padding: 1px 5px;
-        border-radius: 2px;
-        background: #2a2a2a;
-        color: #858585;
-        border: 0.5px solid #333333;
+        font-size: 0.8em;
+        padding: 2px 6px;
+        border-radius: 3px;
+        background: var(--vscode-editorWidget-background, #252526);
+        color: var(--vscode-foreground, #ccc);
+        border: 1px solid var(--vscode-widget-border, #444);
       }
 
       .hr-val {
-        font-size: 10px;
-        color: #cccccc;
-        font-family: var(--font-mono);
+        font-size: 0.9em;
+        color: var(--vscode-foreground, #ccc);
+        font-family: var(--vscode-editor-font-family, monospace);
         text-align: right;
         white-space: nowrap;
       }
 
       .hr-st {
-        font-size: 9px;
+        font-size: 0.85em;
         text-align: right;
         margin-top: 2px;
       }
 
       .out-block {
-        background: #161616;
-        border: 1px solid #2d2d2d;
+        background: var(--vscode-editor-background, #1e1e1e);
+        border: 1px solid var(--vscode-widget-border, #444);
         border-radius: 4px;
         padding: 12px;
-        font-size: 10px;
+        font-size: 0.9em;
         line-height: 1.9;
-        color: #9ca3af;
-        font-family: var(--font-mono);
+        color: var(--vscode-editor-foreground, #ccc);
+        font-family: var(--vscode-editor-font-family, monospace);
         overflow-x: auto;
       }
 
       .out-line {
-        min-height: 19px;
+        min-height: 1.6em;
         white-space: pre-wrap;
         overflow-wrap: anywhere;
       }
 
       .out-command {
-        color: #6e6e6e;
+        color: var(--vscode-descriptionForeground, #aaa);
       }
 
       .out-ok {
-        color: #4ec9b0;
+        color: var(--vscode-testing-iconPassed, #4ec9b0);
       }
 
       .out-text {
-        color: #cccccc;
+        color: var(--vscode-foreground, #ccc);
       }
 
       .raw-details {
         margin-top: 12px;
-        color: #858585;
+        color: var(--vscode-descriptionForeground, #aaa);
       }
 
       .raw-details summary {
@@ -721,26 +627,22 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
       }
 
       .raw-details pre {
-        max-height: 340px;
+        max-height: 400px;
         overflow: auto;
         white-space: pre-wrap;
         word-break: break-word;
-        color: #9ca3af;
-        font-family: var(--font-mono);
-        font-size: 10px;
+        color: var(--vscode-editor-foreground, #ccc);
+        background: var(--vscode-editor-background, #1e1e1e);
+        border: 1px solid var(--vscode-widget-border, #444);
+        padding: 12px;
+        border-radius: 4px;
+        font-family: var(--vscode-editor-font-family, monospace);
+        font-size: 0.9em;
         line-height: 1.6;
       }
 
       @media (max-width: 720px) {
-        body {
-          padding: 0 0 32px;
-        }
-
-        .panel-title {
-          padding: 0 8px;
-          font-size: 19px;
-        }
-
+        body { padding: 12px; }
         .sky {
           height: 330px;
         }
@@ -756,7 +658,7 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
 
         .kv {
           display: grid;
-          gap: 2px;
+          gap: 4px;
         }
 
         .kv-val {
@@ -765,7 +667,7 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
         }
 
         .hi {
-          grid-template-columns: 22px minmax(0, 1fr);
+          grid-template-columns: 24px minmax(0, 1fr);
         }
 
         .hi > :last-child {
@@ -780,105 +682,90 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
     </style>
   </head>
   <body>
-    <h1 class="panel-title">PyGreenSense VS Code panel &mdash; carbon cloud visualization with code smell sizes, issues table, and run history</h1>
-    <div class="vsc">
-      <div class="vsc-bar">
-        <div class="vsc-bartab">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <circle cx="8" cy="8" r="6" stroke="#4ec9b0" stroke-width="1.5"/>
-            <path d="M8 5v4l2 2" stroke="#4ec9b0" stroke-width="1.5" stroke-linecap="round"/>
+    <h1 class="panel-title">PyGreenSense Report</h1>
+
+    <div class="sky">
+      ${renderCloudMap(smellSummaries, issueGroups)}
+      <div class="sky-hint">cloud size reflects issue count &middot; click a cloud to copy a fix prompt</div>
+    </div>
+
+    <div class="tabs" role="tablist" aria-label="PyGreenSense report sections">
+      <button class="tab on" type="button" role="tab" aria-selected="true" data-tab-button="analysis">Analysis</button>
+      <button class="tab" type="button" role="tab" aria-selected="false" data-tab-button="issues">Issues (${escapeHtml(String(issueCount))})</button>
+      <button class="tab" type="button" role="tab" aria-selected="false" data-tab-button="history">History</button>
+      <button class="tab" type="button" role="tab" aria-selected="false" data-tab-button="output">Output</button>
+
+      <div class="toolbar-actions">
+        <button class="icon-btn" type="button" title="Copy summary prompt" data-prompt="${escapeHtml(summaryPrompt)}">
+          <svg width="14" height="14" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+            <circle cx="5" cy="5" r="4" stroke="currentColor" stroke-width="1"/>
+            <line x1="5" y1="3" x2="5" y2="7" stroke="currentColor" stroke-width="1"/>
+            <line x1="3" y1="5" x2="7" y2="5" stroke="currentColor" stroke-width="1"/>
           </svg>
-          PyGreenSense Report
-          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="margin-left:4px;opacity:0.5;" aria-hidden="true">
-            <line x1="2" y1="2" x2="10" y2="10" stroke="#ccc" stroke-width="1.5"/>
-            <line x1="10" y1="2" x2="2" y2="10" stroke="#ccc" stroke-width="1.5"/>
+        </button>
+        <button class="icon-btn" type="button" title="Show output" data-tab-jump="output">
+          <svg width="14" height="14" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+            <path d="M2 5h6M5 2l3 3-3 3" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
+        </button>
+      </div>
+    </div>
+
+    <div>
+      <section id="s-analysis" class="sec on" role="tabpanel" data-tab-panel="analysis">
+        <div class="file-row">
+          <svg width="16" height="16" viewBox="0 0 14 14" fill="none" aria-hidden="true" style="flex:0 0 auto; color: var(--vscode-textLink-foreground, #4ec9b0);">
+            <rect x="2" y="1" width="9" height="12" rx="1" stroke="currentColor" stroke-width="1"/>
+            <line x1="4" y1="5" x2="9" y2="5" stroke="currentColor" stroke-width="1"/>
+            <line x1="4" y1="7.5" x2="9" y2="7.5" stroke="currentColor" stroke-width="1"/>
+            <line x1="4" y1="10" x2="7" y2="10" stroke="currentColor" stroke-width="1"/>
+          </svg>
+          <span class="file-name" title="${escapeHtml(targetPath)}">${escapeHtml(path.basename(targetPath))}</span>
+          <span class="file-tag tag-good">${escapeHtml(workspaceLabel)}</span>
+          <span class="file-tag ${statusTone === 'danger' ? 'tag-bad' : statusTone === 'medium' ? 'tag-warn' : 'tag-good'}">${escapeHtml(statusLabel)}</span>
+          <span class="file-tag tag-bad">${escapeHtml(String(issueCount))} smells</span>
         </div>
-        <div class="vsc-barspace"></div>
-        <div class="vsc-actions">
-          <button class="vsc-btn" type="button" title="Copy summary prompt" data-prompt="${escapeHtml(summaryPrompt)}">
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
-              <circle cx="5" cy="5" r="4" stroke="currentColor" stroke-width="1"/>
-              <line x1="5" y1="3" x2="5" y2="7" stroke="currentColor" stroke-width="1"/>
-              <line x1="3" y1="5" x2="7" y2="5" stroke="currentColor" stroke-width="1"/>
-            </svg>
-          </button>
-          <button class="vsc-btn" type="button" title="Show output" data-tab-jump="output">
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
-              <path d="M2 5h6M5 2l3 3-3 3" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </button>
+        <div class="mgrid">
+          ${metrics.map(renderMetricCard).join('')}
         </div>
-      </div>
+        <div class="sec-hd">Execution details</div>
+        <div class="kv-block">
+          ${detailRows.map(renderDetailRow).join('')}
+        </div>
+      </section>
 
-      <div class="sky">
-        ${renderCloudMap(smellSummaries, issueGroups)}
-        <div class="sky-hint">cloud size reflects issue count &middot; click a cloud to copy a fix prompt</div>
-      </div>
+      <section id="s-issues" class="sec" role="tabpanel" data-tab-panel="issues">
+        <div style="overflow-x:auto;">
+          <table class="itbl">
+            <colgroup><col style="width:140px"/><col style="width:64px"/><col/></colgroup>
+            <thead>
+              <tr><th>Rule</th><th>Line</th><th>Message</th></tr>
+            </thead>
+            <tbody>
+              ${renderIssueTableRows(issueGroups, shouldShowIssueFilePaths(issueGroups))}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
-      <div class="tabs" role="tablist" aria-label="PyGreenSense report sections">
-        <button class="tab on" type="button" role="tab" aria-selected="true" data-tab-button="analysis">Analysis</button>
-        <button class="tab" type="button" role="tab" aria-selected="false" data-tab-button="issues">Issues (${escapeHtml(String(issueCount))})</button>
-        <button class="tab" type="button" role="tab" aria-selected="false" data-tab-button="history">History</button>
-        <button class="tab" type="button" role="tab" aria-selected="false" data-tab-button="output">Output</button>
-      </div>
+      <section id="s-history" class="sec" role="tabpanel" data-tab-panel="history">
+        ${renderHistoryList(historyEntries, data.workspaceRoot)}
+      </section>
 
-      <div class="body">
-        <section id="s-analysis" class="sec on" role="tabpanel" data-tab-panel="analysis">
-          <div class="file-row">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-              <rect x="2" y="1" width="9" height="12" rx="1" stroke="#4ec9b0" stroke-width="1"/>
-              <line x1="4" y1="5" x2="9" y2="5" stroke="#4ec9b0" stroke-width="1"/>
-              <line x1="4" y1="7.5" x2="9" y2="7.5" stroke="#4ec9b0" stroke-width="1"/>
-              <line x1="4" y1="10" x2="7" y2="10" stroke="#4ec9b0" stroke-width="1"/>
-            </svg>
-            <span class="file-name" title="${escapeHtml(targetPath)}">${escapeHtml(path.basename(targetPath))}</span>
-            <span class="file-tag tag-good">${escapeHtml(workspaceLabel)}</span>
-            <span class="file-tag ${statusTone === 'danger' ? 'tag-bad' : statusTone === 'medium' ? 'tag-warn' : 'tag-good'}">${escapeHtml(statusLabel)}</span>
-            <span class="file-tag tag-bad">${escapeHtml(String(issueCount))} smells</span>
-          </div>
-          <div class="mgrid">
-            ${metrics.map(renderMetricCard).join('')}
-          </div>
-          <div class="sec-hd">Execution details</div>
-          <div class="kv-block">
-            ${detailRows.map(renderDetailRow).join('')}
-          </div>
-        </section>
-
-        <section id="s-issues" class="sec" role="tabpanel" data-tab-panel="issues">
-          <div style="overflow-x:auto;">
-            <table class="itbl">
-              <colgroup><col style="width:124px"/><col style="width:64px"/><col/></colgroup>
-              <thead>
-                <tr><th>Rule</th><th>Line</th><th>Message</th></tr>
-              </thead>
-              <tbody>
-                ${renderIssueTableRows(issueGroups, shouldShowIssueFilePaths(issueGroups))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <section id="s-history" class="sec" role="tabpanel" data-tab-panel="history">
-          ${renderHistoryList(historyEntries, data.workspaceRoot)}
-        </section>
-
-        <section id="s-output" class="sec" role="tabpanel" data-tab-panel="output">
-          <div class="sec-hd">Program output (last run)</div>
-          <div class="out-block">
-            ${renderProgramOutput(programOutputLines, data.runResult.code)}
-          </div>
-          ${
-            rawOutput
-              ? `<details class="raw-details">
-                  <summary>Raw capture</summary>
-                  <pre>${escapeHtml(stdout || stderr)}</pre>
-                </details>`
-              : ''
-          }
-        </section>
-      </div>
+      <section id="s-output" class="sec" role="tabpanel" data-tab-panel="output">
+        <div class="sec-hd">Program output (last run)</div>
+        <div class="out-block">
+          ${renderProgramOutput(programOutputLines, data.runResult.code)}
+        </div>
+        ${
+          rawOutput
+            ? `<details class="raw-details">
+                <summary>Raw capture</summary>
+                <pre>${escapeHtml(stdout || stderr)}</pre>
+              </details>`
+            : ''
+        }
+      </section>
     </div>
 
     <script nonce="${nonce}">
@@ -1336,31 +1223,31 @@ function getToneClass(tone: ParsedSeverity): string {
 function getToneAccent(tone: ParsedSeverity): string {
   switch (tone) {
     case 'good':
-      return '#4ec9b0';
+      return 'var(--vscode-testing-iconPassed, #4ec9b0)';
     case 'medium':
-      return '#fbbf24';
+      return 'var(--vscode-problemsWarningIcon-foreground, #fbbf24)';
     case 'low':
-      return '#fb923c';
+      return 'var(--vscode-problemsInfoIcon-foreground, #fb923c)';
     case 'danger':
-      return '#f87171';
+      return 'var(--vscode-problemsErrorIcon-foreground, #f87171)';
     case 'neutral':
     default:
-      return '#569cd6';
+      return 'var(--vscode-foreground, #569cd6)';
   }
 }
 
 function getRuleAccent(rule: string, tone: ParsedSeverity): string {
   const normalized = normalizeRule(rule);
   if (normalized.includes('godclass')) {
-    return '#a78bfa';
+    return 'var(--vscode-terminal-ansiMagenta, #a78bfa)';
   }
 
   if (normalized.includes('longmethod')) {
-    return '#38bdf8';
+    return 'var(--vscode-terminal-ansiCyan, #38bdf8)';
   }
 
   if (normalized.includes('duplicated') || normalized.includes('mutabledefault')) {
-    return '#fbbf24';
+    return 'var(--vscode-terminal-ansiYellow, #fbbf24)';
   }
 
   return getToneAccent(tone);
