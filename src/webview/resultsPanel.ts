@@ -151,9 +151,23 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
       body {
         padding: 20px;
         background-color: var(--vscode-editor-background);
-        color: var(--vscode-editor-foreground);
         font-family: var(--vscode-font-family, sans-serif);
         font-size: var(--vscode-font-size, 13px);
+      }
+
+      body.vscode-light {
+        color: var(--vscode-foreground, black);
+        --cloud-font-color: black;
+      }
+
+      body.vscode-dark {
+        color: var(--vscode-foreground, white);
+        --cloud-font-color: white;
+      }
+
+      body.vscode-high-contrast {
+        color: var(--vscode-foreground, white);
+        --cloud-font-color: white;
       }
 
       .panel-title {
@@ -248,7 +262,7 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
       .cloud-shape {
         position: absolute;
         inset: 0;
-        background: var(--vscode-editor-foreground, #3d4451);
+        background: gray;
         -webkit-mask: var(--cloud-image) center / contain no-repeat;
         mask: var(--cloud-image) center / contain no-repeat;
         transition: opacity 140ms ease;
@@ -268,12 +282,11 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
       }
 
       .cloud-rule {
-        color: var(--vscode-editor-background);
+        color: var(--cloud-font-color, white);
         font-size: var(--cloud-rule-size);
         letter-spacing: var(--cloud-letter-spacing);
         line-height: 1.1;
         text-transform: uppercase;
-        mix-blend-mode: difference;
       }
 
       .cloud-count {
@@ -287,10 +300,9 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
 
       .cloud-meta {
         margin-top: 5px;
-        color: var(--vscode-editor-background);
+        color: var(--cloud-font-color, white);
         font-size: var(--cloud-meta-size);
         line-height: 1;
-        mix-blend-mode: difference;
       }
 
       .tabs {
@@ -501,6 +513,10 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
         padding: 2px 6px;
         border-radius: 3px;
         white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 100%;
+        vertical-align: middle;
         background: var(--vscode-badge-background, #333);
         color: var(--vscode-badge-foreground, #fff);
         border: 1px solid var(--vscode-contrastBorder, transparent);
@@ -737,7 +753,7 @@ function getWebviewHtml(webview: vscode.Webview, data: PyGreenSenseResultsViewMo
       <section id="s-issues" class="sec" role="tabpanel" data-tab-panel="issues">
         <div style="overflow-x:auto;">
           <table class="itbl">
-            <colgroup><col style="width:140px"/><col style="width:64px"/><col/></colgroup>
+            <colgroup><col style="width:200px"/><col style="width:64px"/><col/></colgroup>
             <thead>
               <tr><th>Rule</th><th>Line</th><th>Message</th></tr>
             </thead>
