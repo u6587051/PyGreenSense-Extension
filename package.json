@@ -1,7 +1,7 @@
 {
   "name": "pygreensense-extension",
-  "displayName": "pygreensense-extension",
-  "description": "Him-Cho-Fuang's Senior Project",
+  "displayName": "PyGreenSense",
+  "description": "VS Code extension for detecting Python green code smells and surfacing carbon-aware metrics.",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.110.0"
