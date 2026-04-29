@@ -1,16 +1,49 @@
 {
   "name": "pygreensense-extension",
   "displayName": "PyGreenSense",
-  "description": "VS Code extension for detecting Python green code smells and surfacing carbon-aware metrics.",
+  "description": "Detect Green Code Smells in Python and show sustainability reports in VS Code.",
   "version": "0.0.1",
+  "publisher": "u6587051",
+  "license": "SEE LICENSE IN LICENSE",
   "engines": {
     "vscode": "^1.110.0"
   },
   "categories": [
-    "Other"
+    "Linters",
+    "Programming Languages",
+    "Visualization"
   ],
+  "keywords": [
+    "python",
+    "sustainability",
+    "green code",
+    "code smell",
+    "carbon",
+    "energy",
+    "static analysis"
+  ],
+  "galleryBanner": {
+    "color": "#1f7a4d",
+    "theme": "dark"
+  },
+  "homepage": "https://github.com/u6587051/PyGreenSense-Extension#readme",
+  "bugs": {
+    "url": "https://github.com/u6587051/PyGreenSense-Extension/issues"
+  },
+  "qna": "marketplace",
+  "badges": [
+    {
+      "url": "https://img.shields.io/badge/python-3.9%2B-3776AB",
+      "href": "https://www.python.org/",
+      "description": "Requires Python 3.9 or newer"
+    }
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/u6587051/PyGreenSense-Extension"
+  },
+  "icon": "media/icon.png",
   "activationEvents": [
-    "onCommand:pygreensense-extension.helloWorld",
     "onCommand:pygreensense-extension.checkVenv",
     "onCommand:pygreensense-extension.installRequirements",
     "onCommand:pygreensense-extension.analyzeFile",
@@ -20,10 +53,6 @@
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
-      {
-        "command": "pygreensense-extension.helloWorld",
-        "title": "Hello World"
-      },
       {
         "command": "pygreensense-extension.checkVenv",
         "title": "PyGreenSense: Check Virtual Environment"
@@ -43,7 +72,10 @@
     ]
   },
   "files": [
-    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "dist/extension.js",
     "media",
     "python"
   ],

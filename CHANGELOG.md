@@ -1,9 +1,9 @@
-# Change Log
+# Changelog
 
-All notable changes to the "pygreensense-extension" extension will be documented in this file.
+All notable changes to PyGreenSense are documented in this file.
 
-Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
+## 0.0.1
 
-## [Unreleased]
-
-- Initial release
+- Initial public package for Visual Studio Code.
+- Added commands for environment setup, file analysis, and workspace analysis.
+- Added a report view for issue groups, sustainability metrics, and run history.
