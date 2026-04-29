@@ -2,7 +2,7 @@
   "name": "pygreensense-extension",
   "displayName": "PyGreenSense",
   "description": "Detect Green Code Smells in Python and show sustainability reports in VS Code.",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "u6587051",
   "license": "SEE LICENSE IN LICENSE",
   "engines": {
